@@ -1,6 +1,6 @@
 module github.com/o-ga09/gopher-office
 
-go 1.26.1
+go 1.27.0
 
 require (
 	github.com/hajimehoshi/ebiten/v2 v2.10.5
