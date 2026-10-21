@@ -1,0 +1,19 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - gosec       # セキュリティ（脆弱なコードパターンの検出）
+    - errorlint   # errors.Is / errors.As を使う
+    - bodyclose   # HTTP レスポンスボディの閉じ忘れ
+    - misspell
+    - unconvert
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/o-ga09/gopher-office

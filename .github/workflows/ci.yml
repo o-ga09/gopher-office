@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 同じ ref の古い実行は打ち切る
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Ebitengine を Linux でネイティブビルドするために必要なライブラリ
+  EBITEN_APT_DEPS: >-
+    libc6-dev libgl1-mesa-dev libxcursor-dev libxi-dev libxinerama-dev
+    libxrandr-dev libxxf86vm-dev libasound2-dev pkg-config
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true # 標準ライブラリの脆弱性修正を含む最新パッチを使う
+      - name: Install system libraries
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends $EBITEN_APT_DEPS
+      - name: go mod tidy が差分を出さないこと
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test -race -shuffle=on ./...
+      - name: WASM ビルド（ブラウザが主要ターゲット）
+        run: GOOS=js GOARCH=wasm go build -o /dev/null ./cmd/client
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true # 標準ライブラリの脆弱性修正を含む最新パッチを使う
+      - name: Install system libraries
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends $EBITEN_APT_DEPS
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.15.0

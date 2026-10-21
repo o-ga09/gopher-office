@@ -47,8 +47,8 @@ func drawText(dst *ebiten.Image, s string, size float64, x, y float64, a align, 
 
 // Gopher のクレジット（CC BY 3.0、Must）。画面中央に常時表示し、閉じる操作は設けない。
 const (
-	creditLine1 = "The Go gopher was designed by Renée French."
-	creditLine2 = "Licensed under CC BY 3.0 (https://creativecommons.org/licenses/by/3.0/) - recolored."
+	attributionLine1 = "The Go gopher was designed by Renée French."
+	attributionLine2 = "Licensed under CC BY 3.0 (https://creativecommons.org/licenses/by/3.0/) - recolored."
 )
 
 // drawCredit は Gopher のクレジットを画面中央に描く。必ずシーンの最前面（最後）に呼ぶこと。
@@ -59,8 +59,8 @@ func drawCredit(dst *ebiten.Image) {
 		padY = 10.0
 		gap  = 4.0
 	)
-	w1, h := text.Measure(creditLine1, face(size), 0)
-	w2, _ := text.Measure(creditLine2, face(size), 0)
+	w1, h := text.Measure(attributionLine1, face(size), 0)
+	w2, _ := text.Measure(attributionLine2, face(size), 0)
 	w := max(w1, w2)
 
 	boxW, boxH := w+padX*2, h*2+gap+padY*2
@@ -69,6 +69,6 @@ func drawCredit(dst *ebiten.Image) {
 	vector.StrokeRect(dst, float32(boxX), float32(boxY), float32(boxW), float32(boxH), 1, color.RGBA{0xff, 0xff, 0xff, 0x50}, false)
 
 	white := color.RGBA{0xff, 0xff, 0xff, 0xff}
-	drawText(dst, creditLine1, size, screenW/2, boxY+padY, alignCenter, white)
-	drawText(dst, creditLine2, size, screenW/2, boxY+padY+h+gap, alignCenter, white)
+	drawText(dst, attributionLine1, size, screenW/2, boxY+padY, alignCenter, white)
+	drawText(dst, attributionLine2, size, screenW/2, boxY+padY+h+gap, alignCenter, white)
 }
