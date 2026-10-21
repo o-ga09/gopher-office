@@ -4,7 +4,7 @@ Ebitengine（ブラウザ WASM）と Agones で作る、Gopher のバーチャ�
 
 招待URLを開くと、同じオフィスに Gopher として入れる。歩き回る姿が全員に同期され、数百体の Gopher で画面を埋め尽くせる。
 
-> **ステータス:** 設計中（Draft）。実装はこれから。
+> **ステータス:** P1 完了（ローカルで 1 体の Gopher が歩ける）。オンライン化はこれから。
 > 最初のマイルストーンは 2026-11-06 の [Ebitengine ぷちConf #5](https://gocon.connpass.com/event/405972/) の LT デモ。
 
 ## 特徴（v0 の予定）
@@ -31,6 +31,16 @@ Cloudflare Tunnel → ingress-nginx
 
 実行基盤はおうち k3s（ArgoCD）。詳細は [docs/design.md](docs/design.md)。
 
+## クイックスタート
+
+```bash
+make serve   # ブラウザ版（WASM）をビルドして http://localhost:8080 で配信
+make run     # デスクトップ版を起動
+make test    # テスト
+```
+
+操作: 起動後に Gopher（性別）を選ぶ。`WASD` で移動、マップをクリック（タップ）するとその地点へ歩く。
+
 ## 開発ルール
 
 - ブラウザ（WASM）を主要ターゲットとする。変更後は `GOOS=js GOARCH=wasm go build ./cmd/client` が通ること
@@ -42,7 +52,7 @@ Cloudflare Tunnel → ingress-nginx
 | Phase | 内容 | 状態 |
 |---|---|---|
 | P0 | 設計（[docs/design.md](docs/design.md)） | ✅ |
-| P1 | `internal/sim`（マップ・衝突・経路探索・移動）、Gopher 3 色、背景、クレジット表示 | ⬜ |
+| P1 | `internal/sim`（マップ・衝突・経路探索・移動）、Gopher 3 色、背景、クレジット表示 | ✅ |
 | P2 | proto 定義、`cmd/gameserver`、オンライン接続、`cmd/bot`、招待URL入室 | ⬜ |
 | P3 | Agones 導入、Fleet、`cmd/gateway`、Tunnel 公開 | ⬜ |
 | P4 | 200 体の負荷試験、事前録画、LT リハーサル | ⬜ |
