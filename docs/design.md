@@ -67,6 +67,7 @@ ovice のような 2D バーチャルオフィスを、**Ebitengine（ブラウ�
 | D10 | クレジット | **CC BY 3.0 の Gopher クレジットを画面中央に常時表示（Must）** | [§9.3](#93-gopher-クレジット表記must) |
 | D11 | 通話（LT 後） | 検証用に **P2P メッシュ（WebRTC 直結）＋自前シグナリング** | まず最小構成で検証。人数上限は割り切る |
 | D12 | DB / Redis | 既存クラスタの MySQL / Redis | 新規ミドルウェアを増やさない |
+| D14 | API サーバの技術選定 | Web フレームワーク **Echo v5**（`github.com/labstack/echo/v5`）、ORM **GORM**（`gorm.io/gorm` + `gorm.io/driver/mysql`）、バリデーション **go-playground/validator v10** | ユーザー指定 |
 | D13 | ドメイン | `*.o-ga09.com`（仮: `office.o-ga09.com`） | 既存 Tunnel 設定を流用 |
 
 ---
@@ -253,6 +254,19 @@ sequenceDiagram
 
 ## 7. ゲーム API サーバ
 
+### 技術スタック
+
+| 用途 | 採用 | 備考 |
+|---|---|---|
+| Web フレームワーク | Echo v5（`github.com/labstack/echo/v5`） | v4 とは import パスと API が異なる（ハンドラの引数など）。実装時に v5 のドキュメントで確認する |
+| ORM | GORM（`gorm.io/gorm`、`gorm.io/driver/mysql`） | 下記のデータモデルは GORM のモデルとして定義する |
+| バリデーション | go-playground/validator v10 | リクエスト DTO の struct タグで検証する |
+
+- **バリデーションの適用範囲**: 表示名は 1〜32 文字（rune 数。`validate:"required,min=1,max=32"` は文字数で数えられる）、性別は 0〜2、招待コードは英数字 12 文字程度。制御文字の除去は validator ではなく入力の正規化で行う
+- **マイグレーション**: v0 は GORM の `AutoMigrate` を使わず、`migration-job.yaml`（コンテナ名 `migration`）で SQL を適用する方針とする。AutoMigrate は本番の起動時にスキーマを書き換えるため、Fleet や複数レプリカと相性が悪い
+- **画像アップロード**: `PUT /v1/me/icon` は Echo のボディサイズ制限（256 KB）をミドルウェアで掛ける
+- **認証**: playerToken は Echo のミドルウェアで検証し、`playerId` をコンテキストに載せる。`/internal/*` は別ミドルウェアで internalToken を検証する
+
 ### エンドポイント
 
 | メソッド | パス | 説明 |
@@ -269,6 +283,8 @@ sequenceDiagram
 | `GET` | `/healthz` | ヘルスチェック |
 
 ### データモデル（MySQL）
+
+以下の DDL が目標とするスキーマ。GORM のモデル（`internal/api/model`）はこれに合わせて定義する。
 
 ```sql
 CREATE TABLE players (
