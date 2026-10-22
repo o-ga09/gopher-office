@@ -283,9 +283,19 @@ sequenceDiagram
 | バリデーション | go-playground/validator v10 | リクエスト DTO の struct タグで検証する |
 
 - **バリデーションの適用範囲**: 表示名は 1〜32 文字（rune 数。`validate:"required,min=1,max=32"` は文字数で数えられる）、性別は 0〜2、招待コードは英数字 12 文字程度。制御文字の除去は validator ではなく入力の正規化で行う
-- **マイグレーション**: v0 は GORM の `AutoMigrate` を使わず、`migration-job.yaml`（コンテナ名 `migration`）で SQL を適用する方針とする。AutoMigrate は本番の起動時にスキーマを書き換えるため、Fleet や複数レプリカと相性が悪い
-- **画像アップロード**: `PUT /v1/me/icon` は Echo のボディサイズ制限（256 KB）をミドルウェアで掛ける
-- **認証**: playerToken は Echo のミドルウェアで検証し、`playerId` をコンテキストに載せる。`/internal/*` は別ミドルウェアで internalToken を検証する
+- **マイグレーション**: GORM の `AutoMigrate` は使わない（起動のたびにスキーマを書き換えると、Fleet や複数レプリカと相性が悪い）。SQL は `internal/migrate/sql/` に置いてバイナリに埋め込み、`cmd/migrate`（`migration-job.yaml`、コンテナ名 `migration`）で 1 回だけ適用する。MySQL の `GET_LOCK` で同時実行を直列化し、適用済みのバージョンは `schema_migrations` に記録する
+- **画像アップロード**: `PUT /v1/me/icon` は Echo のボディサイズ制限（256 KB）をミドルウェアで掛ける（P2c）
+- **認証**: playerToken は、ルートごとに付けたミドルウェア（`requireAuth`）で検証して `playerId` をコンテキストに載せる。グループにまとめて付けると、存在しないパスにも認証が掛かって 404 が 401 になるため。`/internal/*` は別ミドルウェアで internalToken を検証する
+
+### 実装で確定した API の方針（P2b）
+
+- **エラーの形**: `{"error": {"code": "...", "message": "...", "fields": {...}}}`。想定外のエラー（DB のエラーなど）の詳細は、クライアントには返さずログにだけ残す。バリデーションエラーは JSON のフィールド名で返す
+- **入力の制限**: ボディは 8 KB まで。表示名は、正規化の前の入力を 256 文字までとし、正規化（制御文字・BiDi・ゼロ幅文字の除去、32 文字）して保存する
+- **レート制限**: ゲスト作成は IP ごとに 20 回/分、ワークスペース作成・入室はプレイヤーごとに 60 回/分。Cloudflare Tunnel の背後では、`-trust-cloudflare-ip` で `CF-Connecting-IP` を使う（API に Cloudflare を通らず届かない場合だけ。偽装できてしまうため既定は無効）。1 人が作れるワークスペースは 5 つまで
+- **招待コード**: 暗号論的乱数の base62・12 文字（約 71 ビット）。存在しないコードと形式の違うコードは、どちらも同じ 404 を返す。ログには URI ではなくルートのパターンを記録し、招待コードを残さない
+- **CORS**: 既定は無効（本番は同一オリジン）。開発でブラウザ版と API のオリジンが違うときだけ `-cors-origin` で許可する。ワイルドカードは使わない
+- **ルームの割り当て**: `RoomAllocator` インターフェースで抽象化し、P2b は固定の GameServer を返す `StaticAllocator`。Agones の `GameServerAllocation` は P3 で追加する
+- **運用コマンド**: `cmd/ctl` がワークスペースを作って招待 URL を表示する（ワークスペース作成の UI は P6）
 
 ### エンドポイント
 
@@ -304,13 +314,13 @@ sequenceDiagram
 
 ### データモデル（MySQL）
 
-以下の DDL が目標とするスキーマ。GORM のモデル（`internal/api/model`）はこれに合わせて定義する。
+実際の DDL は `internal/migrate/sql/` にある（下はその要点）。GORM のモデルは `internal/api/model.go`。
 
 ```sql
 CREATE TABLE players (
   id            CHAR(26)     PRIMARY KEY,        -- ULID
   display_name  VARCHAR(128) NOT NULL,           -- 32 rune 以内。バイト余裕を持たせる
-  gender        TINYINT      NOT NULL,           -- 0=男性(青) 1=女性(赤) 2=その他(黄)
+  gender        TINYINT UNSIGNED NOT NULL,       -- 0=男性(青) 1=女性(赤) 2=その他(黄)
   icon_hash     CHAR(64)     NULL,               -- アイコン画像の SHA-256
   created_at    DATETIME(3)  NOT NULL
 );
@@ -323,21 +333,23 @@ CREATE TABLE player_icons (
 
 CREATE TABLE workspaces (
   id           CHAR(26)    PRIMARY KEY,
+  owner_id     CHAR(26)    NOT NULL REFERENCES players (id),   -- 1 人あたりの作成数の制限に使う
   name         VARCHAR(64) NOT NULL,
-  invite_code  VARCHAR(16) NOT NULL UNIQUE,      -- 推測困難なランダム文字列
+  -- 照合順序は ascii_bin（大文字と小文字を区別する）。ci だと、大文字小文字だけが違う別のコードが衝突する
+  invite_code  VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL UNIQUE,
   max_players  INT         NOT NULL DEFAULT 200,
   created_at   DATETIME(3) NOT NULL
 );
 
 CREATE TABLE rooms (
   id            CHAR(26)    PRIMARY KEY,
-  workspace_id  CHAR(26)    NOT NULL,
+  workspace_id  CHAR(26)    NOT NULL REFERENCES workspaces (id),
   name          VARCHAR(64) NOT NULL,
   map_id        VARCHAR(32) NOT NULL DEFAULT 'office-1'
 );
 ```
 
-v0 では「ワークスペース作成時にルームを 1 つ自動作成」する。
+v0 では「ワークスペース作成時にルームを 1 つ自動作成」する（同じトランザクションで作る）。`player_icons` は P2c（アイコン画像）で追加する。
 
 ### Redis
 
@@ -350,11 +362,17 @@ v0 では「ワークスペース作成時にルームを 1 つ自動作成」�
 
 | 種類 | 用途 | 中身 | 有効期限 |
 |---|---|---|---|
-| playerToken | API 認証 | `sub=playerId` | 30 日 |
-| roomToken | ゲートウェイ / GameServer への入室 | `roomId, playerId, gsName` | 60 秒 |
+| playerToken | API 認証 | `sub=playerId`、`aud=player` | 30 日 |
+| roomToken | ゲートウェイ / GameServer への入室 | `sub=playerId`、`room`（roomId）、`gs`（gsName）、`aud=room` | 60 秒 |
 | internalToken | GameServer → API | 固定の共有シークレット | — |
 
-招待コードは 12 文字程度の base62 乱数（約 71 ビット）とし、推測不能にする。署名鍵は SealedSecret で配布する。
+- 署名は HS256。検証では、アルゴリズムの固定、`iss`・`aud`・`exp` の必須チェックを行い、`alg=none` や有効期限なしのトークンは通さない
+- **鍵は用途ごとに分ける**。playerToken の鍵は API だけが持ち、roomToken の鍵を API・ゲートウェイ・GameServer が共有する。GameServer の鍵が漏れても、playerToken は偽造できない（`aud` でも用途を分け、playerToken を roomToken として使い回せない）
+- GameServer 上のプレイヤー ID は、roomToken の `sub`（API のプレイヤー ID）になる。クライアントが名前を偽って別人になることはできない
+- GameServer は自分が担当するルームの ID と、トークンの `room` が一致しなければ拒否する
+- 鍵は環境変数（`PLAYER_TOKEN_SECRET`、`ROOM_TOKEN_SECRET`）で渡し、フラグでは渡さない。32 バイト未満の鍵と、2 つの鍵が同じ値の起動は拒否する。本番は SealedSecret で配布する
+
+招待コードは 12 文字の base62 乱数（約 71 ビット）とし、推測不能にする。
 
 ---
 
