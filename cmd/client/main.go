@@ -12,7 +12,7 @@ func main() {
 	ebiten.SetWindowTitle("Gopher Office")
 	ebiten.SetWindowSize(1280, 720)
 	ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
-	if err := ebiten.RunGame(client.NewGame()); err != nil {
+	if err := ebiten.RunGame(client.NewGame(loadConfig())); err != nil {
 		log.Fatal(err)
 	}
 }

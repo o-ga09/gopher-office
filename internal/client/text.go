@@ -45,6 +45,41 @@ func drawText(dst *ebiten.Image, s string, size float64, x, y float64, a align, 
 	text.Draw(dst, s, f, op)
 }
 
+// 名前タグは描画のたびに文字を組むと重い（数百人の画面で支配的になる）ので、画像にしてキャッシュする。
+type nameTagKey struct {
+	name string
+	self bool
+}
+
+// maxNameTags はキャッシュする名前タグの上限。超えたら作り直す（入退室が多いときにメモリが増え続けないように）。
+const maxNameTags = 2000
+
+func (g *Game) nameTag(name string, self bool) *ebiten.Image {
+	k := nameTagKey{name, self}
+	if img, ok := g.nameTags[k]; ok {
+		return img
+	}
+	if len(g.nameTags) >= maxNameTags {
+		for _, img := range g.nameTags {
+			img.Deallocate()
+		}
+		clear(g.nameTags)
+	}
+
+	const size = 13.0
+	w, h := textSize(name, size)
+	img := ebiten.NewImage(int(w)+10, int(h)+4)
+	bg := color.RGBA{0x10, 0x14, 0x20, 0xb0}
+	fg := color.RGBA{0xff, 0xff, 0xff, 0xff}
+	if self {
+		bg = color.RGBA{0x1f, 0x4f, 0x8f, 0xd0} // 自分は色を変えて見つけやすくする
+	}
+	img.Fill(bg)
+	drawText(img, name, size, float64(img.Bounds().Dx())/2, 2, alignCenter, fg)
+	g.nameTags[k] = img
+	return img
+}
+
 // Gopher のクレジット（CC BY 3.0、Must）。画面中央に常時表示し、閉じる操作は設けない。
 const (
 	attributionLine1 = "The Go gopher was designed by Renée French."
