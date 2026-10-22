@@ -43,11 +43,29 @@ make test    # テスト
 
 操作: 起動後に Gopher（性別）を選ぶ。`WASD` で移動、マップをクリック（タップ）するとその地点へ歩く。
 
-ブラウザ版は URL のクエリで接続先を決める。何も付けなければオフライン（自分だけ）で動く。
+### 招待 URL で入る（API + MySQL + GameServer）
+
+```bash
+make db           # MySQL を Docker で起動（初回は数十秒待つ）
+make migrate      # テーブルを作る
+make api          # ターミナル 1: API を起動
+make dev-invite   # ターミナル 2: GameServer（roomToken を検証）とブラウザ版を配信
+make invite       # ワークスペースを作って招待 URL を表示する
+```
+
+表示された URL の末尾に `?api=http://localhost:8080` を付けて開く（ブラウザ版と API のオリジンが違うため）。
+同じ URL を複数のタブで開けば、同じルームで会える。`go run ./cmd/bot -api http://localhost:8080 -invite <コード> -n 100` で bot も入れる。
+秘密鍵は `make dev-env` が `.env.dev` にランダムに作る（コミットされない）。DB を使うテストは `make test-all`。
+
+### ブラウザ版のクエリ
+
+ブラウザ版は URL で接続先を決める。何も付けなければオフライン（自分だけ）で動く。
 
 | クエリ | 意味 |
 |---|---|
-| `?online=1` | 同じオリジンの `/room` に接続する |
+| `/w/{招待コード}` | 招待 URL。API でゲスト登録・入室して、返された GameServer につなぐ |
+| `?api=http://host:8080` | API のベース URL（既定は同じオリジン） |
+| `?online=1` | API を通さず、同じオリジンの `/room` に直接つなぐ（開発用） |
 | `?server=ws://host:7654/room` | 接続先を指定する |
 | `?name=たいち` | 表示名 |
 
@@ -66,7 +84,8 @@ make test    # テスト
 | P0 | 設計（[docs/design.md](docs/design.md)） | ✅ |
 | P1 | `internal/sim`（マップ・衝突・経路探索・移動）、Gopher 3 色、背景、クレジット表示 | ✅ |
 | P2a | proto 定義、`cmd/gameserver`（`-local`）、クライアントのオンライン接続、`cmd/bot` | ✅ |
-| P2b | API（ゲスト認証、ワークスペース、招待URL入室、roomToken の検証） | ⬜ |
+| P2b | API（ゲスト認証、ワークスペース、招待URL入室、roomToken の検証）、マイグレーション | ✅ |
+| P2c | アイコン画像のアップロード・配信、プロフィール編集の UI | ⬜ |
 | P3 | Agones 導入、Fleet、`cmd/gateway`、Tunnel 公開 | ⬜ |
 | P4 | 200 体の負荷試験（Sync の帯域削減を含む）、事前録画、LT リハーサル | ⬜ |
 | P5 | P2P 音声通話、近接音声、動画 | ⬜ |

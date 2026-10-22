@@ -40,3 +40,25 @@ func TestCleanNameTruncatesByRune(t *testing.T) {
 		t.Fatal("result must be valid UTF-8")
 	}
 }
+
+func TestCleanText(t *testing.T) {
+	if got := CleanText("  Team\nA  ", 64); got != "TeamA" {
+		t.Errorf("got %q", got)
+	}
+	if got := CleanText("\u200b \n", 64); got != "" {
+		t.Errorf("only invisible characters must become empty, got %q", got)
+	}
+	if got := CleanText("abcdef", 3); got != "abc" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestCleanTextLeadingSpacesDoNotUseTheBudget(t *testing.T) {
+	got := CleanText("   "+strings.Repeat("a", 10), 10)
+	if got != strings.Repeat("a", 10) {
+		t.Fatalf("got %q", got)
+	}
+	if got := CleanText("ab   cd", 4); got != "ab" { // 切り詰めた結果の末尾の空白は削る
+		t.Fatalf("got %q", got)
+	}
+}

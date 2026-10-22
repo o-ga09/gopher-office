@@ -23,6 +23,20 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    # DB を使うテスト（マイグレーション、ストア、API の結合）のための、使い捨ての MySQL。
+    # イメージはダイジェストで固定する（タグは付け替えられるため）。更新は手動で行う
+    services:
+      mysql:
+        image: mysql:8.4@sha256:c36050afdca850f23cef85703f84c7531a5ae155a11b5ee1c60acb09937c4084
+        env:
+          MYSQL_ROOT_PASSWORD: ci-only-throwaway
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci-only-throwaway"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -39,6 +53,8 @@ jobs:
         run: go vet ./...
       - name: go test
         run: go test -race -shuffle=on ./...
+        env:
+          TEST_MYSQL_DSN: root:ci-only-throwaway@tcp(127.0.0.1:3306)/
       - name: WASM ビルド（ブラウザが主要ターゲット）
         run: GOOS=js GOARCH=wasm go build -o /dev/null ./cmd/client
 
