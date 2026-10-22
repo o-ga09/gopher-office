@@ -20,11 +20,23 @@ import (
 	"github.com/o-ga09/gopher-office/internal/wire"
 )
 
-// Config はクライアントの接続設定。ServerURL が空ならオフライン（自分だけ）で動く。
+// Config はクライアントの接続設定。ServerURL も InviteCode も空ならオフライン（自分だけ）で動く。
 type Config struct {
-	ServerURL string // GameServer の WebSocket URL（例: ws://localhost:7654/room）
+	// ServerURL は GameServer の WebSocket URL（例: ws://localhost:7654/room）。API を通さず直接つなぐ（開発用）。
+	ServerURL string
 	RoomToken string
-	Name      string // 表示名。空ならサーバが既定名を付ける
+	Name      string // 表示名。空なら既定名（API 経由では前回の名前）
+
+	// InviteCode を指定すると、API（APIBase）でゲスト登録と入室を行い、返された接続先と roomToken でつなぐ。
+	InviteCode string
+	APIBase    string     // API のベース URL（例: http://localhost:8080）
+	Store      TokenStore // playerToken の保存先。nil なら保存しない（毎回新しいゲストになる）
+}
+
+// TokenStore は playerToken の保存先。ブラウザでは localStorage を使う。
+type TokenStore interface {
+	Load() string
+	Save(token string)
 }
 
 type scene int
@@ -54,10 +66,11 @@ type Game struct {
 	m  *sim.Map
 	bg *ebiten.Image
 
-	w    *netcode.World
-	conn *netcode.Client // オフラインのときは nil
-	dial chan dialResult
-	err  string
+	w        *netcode.World
+	conn     *netcode.Client // オフラインのときは nil
+	dial     chan dialResult
+	err      string // 接続の失敗・切断の理由（利用者向けの文言）
+	errTitle string
 
 	frame        int // 現在の tick 内の経過フレーム
 	pendingClick *sim.Point
@@ -93,7 +106,7 @@ func NewGame(cfg Config) *Game {
 	return g
 }
 
-func (g *Game) online() bool { return g.cfg.ServerURL != "" }
+func (g *Game) online() bool { return g.cfg.ServerURL != "" || g.cfg.InviteCode != "" }
 
 func (g *Game) Layout(_, _ int) (int, int) { return screenW, screenH }
 
@@ -122,7 +135,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	case sceneOffice:
 		g.drawOffice(screen)
 	case sceneError:
-		g.drawMessage(screen, "Disconnected", g.err+"\n\nClick to go back")
+		g.drawMessage(screen, g.errTitle, g.err+"\n\nClick to go back")
 	}
 	drawCredit(screen) // 常に最前面・画面中央
 }
@@ -175,17 +188,27 @@ func (g *Game) enter(gender sim.Gender) {
 	}
 
 	g.scene = sceneConnecting
-	g.dial = make(chan dialResult, 1)
-	hello := &officev1.Hello{
-		RoomToken: g.cfg.RoomToken,
-		Profile:   &officev1.Profile{DisplayName: name, Gender: wire.GenderToProto(gender)},
-	}
-	url := g.cfg.ServerURL
+	dial := make(chan dialResult, 1)
+	g.dial = dial
+	cfg := g.cfg
 	go func() { // 接続の待ち時間でゲームループを止めない
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		c, err := netcode.Dial(ctx, url, hello)
-		g.dial <- dialResult{c: c, err: err}
+
+		url, token := cfg.ServerURL, cfg.RoomToken
+		if cfg.InviteCode != "" {
+			j, err := joinViaAPI(ctx, cfg, name, gender)
+			if err != nil {
+				dial <- dialResult{err: err}
+				return
+			}
+			url, token = j.ServerURL, j.RoomToken
+		}
+		c, err := netcode.Dial(ctx, url, &officev1.Hello{
+			RoomToken: token,
+			Profile:   &officev1.Profile{DisplayName: name, Gender: wire.GenderToProto(gender)},
+		})
+		dial <- dialResult{c: c, err: err}
 	}()
 }
 
@@ -193,7 +216,7 @@ func (g *Game) updateConnecting() {
 	select {
 	case r := <-g.dial:
 		if r.err != nil {
-			g.fail("Cannot connect to the server:\n" + r.err.Error())
+			g.fail(dialErrorText(r.err))
 			return
 		}
 		g.conn = r.c
@@ -206,6 +229,11 @@ func (g *Game) fail(msg string) {
 	if g.conn != nil {
 		g.conn.Close()
 		g.conn = nil
+	}
+	// 入室できなかったのか、入室後に切れたのかで、見出しを分ける
+	g.errTitle = "Disconnected"
+	if g.scene == sceneConnecting || (g.w != nil && !g.w.Ready) {
+		g.errTitle = "Cannot join"
 	}
 	g.err, g.scene = msg, sceneError
 }

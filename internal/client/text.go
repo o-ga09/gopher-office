@@ -34,15 +34,14 @@ const (
 
 // drawText は (x, y) を基準にテキストを描く。alignCenter のときは x がテキストの中心。y は上端。
 func drawText(dst *ebiten.Image, s string, size float64, x, y float64, a align, clr color.Color) {
-	f := face(size)
-	if a == alignCenter {
-		w, _ := text.Measure(s, f, 0)
-		x -= w / 2
-	}
 	op := &text.DrawOptions{}
+	op.LineSpacing = size * 1.5 // 既定は 0 で、複数行が重なる
+	if a == alignCenter {
+		op.PrimaryAlign = text.AlignCenter // 各行を x を中心に揃える
+	}
 	op.GeoM.Translate(x, y)
 	op.ColorScale.ScaleWithColor(clr)
-	text.Draw(dst, s, f, op)
+	text.Draw(dst, s, face(size), op)
 }
 
 // 名前タグは描画のたびに文字を組むと重い（数百人の画面で支配的になる）ので、画像にしてキャッシュする。
