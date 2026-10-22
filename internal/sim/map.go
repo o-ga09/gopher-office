@@ -92,6 +92,19 @@ func (m *Map) Set(x, y int, t Tile) {
 // Walkable は指定タイルが歩けるかを返す。
 func (m *Map) Walkable(x, y int) bool { return m.At(x, y).Walkable() }
 
+// WalkableTiles は歩けるタイルを（y, x の順に）すべて返す。
+func (m *Map) WalkableTiles() []Point {
+	var ps []Point
+	for y := 0; y < m.Height; y++ {
+		for x := 0; x < m.Width; x++ {
+			if m.Walkable(x, y) {
+				ps = append(ps, Point{x, y})
+			}
+		}
+	}
+	return ps
+}
+
 func (m *Map) fill(x0, y0, x1, y1 int, t Tile) {
 	for y := y0; y <= y1; y++ {
 		for x := x0; x <= x1; x++ {

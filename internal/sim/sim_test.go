@@ -297,3 +297,44 @@ func TestActorDeterministic(t *testing.T) {
 		t.Fatal("simulation is not deterministic")
 	}
 }
+
+func TestNewActorAtAndDir(t *testing.T) {
+	a := NewActorAt(300, 400)
+	if a.X != 300 || a.Y != 400 {
+		t.Fatalf("pos = (%d,%d)", a.X, a.Y)
+	}
+	a.SetDir(5, -3) // 範囲外の値は -1, 0, 1 に丸められる
+	if dx, dy := a.Dir(); dx != 1 || dy != -1 {
+		t.Fatalf("dir = (%d,%d)", dx, dy)
+	}
+}
+
+func TestWalkableTiles(t *testing.T) {
+	m := mustMap(t,
+		"####",
+		"#.,#",
+		"#D.#",
+		"####",
+	)
+	got := m.WalkableTiles()
+	want := []Point{{1, 1}, {2, 1}, {2, 2}}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	}
+}
+
+func TestActorMoveToStartsMovingImmediatelyFromTileCenter(t *testing.T) {
+	m := OfficeMap()
+	a := NewActor(OfficeSpawn)
+	x, y := a.X, a.Y
+	a.MoveTo(m, Point{X: 2, Y: 2})
+	a.Step(m)
+	if a.X == x && a.Y == y {
+		t.Fatal("must move on the very first step when starting from a tile center")
+	}
+}

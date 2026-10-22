@@ -1,50 +1,85 @@
-// Package client は Ebitengine のクライアント（描画・入力・画面遷移）。ロジックは internal/sim に置く。
+// Package client は Ebitengine のクライアント（描画・入力・画面遷移）。ロジックは internal/sim と internal/netcode に置く。
 package client
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"sort"
+	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	"github.com/hajimehoshi/ebiten/v2/vector"
 
+	officev1 "github.com/o-ga09/gopher-office/gen/office/v1"
+	"github.com/o-ga09/gopher-office/internal/netcode"
 	"github.com/o-ga09/gopher-office/internal/sim"
+	"github.com/o-ga09/gopher-office/internal/wire"
 )
+
+// Config はクライアントの接続設定。ServerURL が空ならオフライン（自分だけ）で動く。
+type Config struct {
+	ServerURL string // GameServer の WebSocket URL（例: ws://localhost:7654/room）
+	RoomToken string
+	Name      string // 表示名。空ならサーバが既定名を付ける
+}
 
 type scene int
 
 const (
-	sceneSelect scene = iota // 性別（Gopher の色）選択
-	sceneOffice              // オフィス
+	sceneSelect     scene = iota // 性別（Gopher の色）選択
+	sceneConnecting              // サーバに接続中
+	sceneOffice                  // オフィス
+	sceneError                   // 接続失敗・切断
 )
 
 // framesPerTick は描画フレーム（60Hz）あたりのシミュレーション tick（20Hz）の比。
 const framesPerTick = 60 / sim.TickRate
 
+type dialResult struct {
+	c   *netcode.Client
+	err error
+}
+
 // Game は ebiten.Game の実装。
 type Game struct {
+	cfg   Config
 	scene scene
 
-	gender  sim.Gender
 	sprites [3]*ebiten.Image
 
 	m  *sim.Map
 	bg *ebiten.Image
 
-	me           *sim.Actor
-	prevX, prevY int // 直前の tick の位置（補間用）
+	w    *netcode.World
+	conn *netcode.Client // オフラインのときは nil
+	dial chan dialResult
+	err  string
+
 	frame        int // 現在の tick 内の経過フレーム
 	pendingClick *sim.Point
 	keys         [4]bool // 今の tick の間に押された移動キー（A, D, W, S）
-	hoverCard    int
-	cardRects    [3]image.Rectangle
+	lastDirX     int     // サーバに最後に送った方向入力
+	lastDirY     int
+
+	hoverCard int
+	cardRects [3]image.Rectangle
+
+	nameTags map[nameTagKey]*ebiten.Image
+	items    []drawable
+}
+
+type drawable struct {
+	x, y float64
+	p    *netcode.Player
 }
 
 // NewGame は選択画面から始まる Game を作る。
-func NewGame() *Game {
-	g := &Game{m: sim.OfficeMap(), hoverCard: -1}
+func NewGame(cfg Config) *Game {
+	g := &Game{cfg: cfg, m: sim.OfficeMap(), hoverCard: -1, nameTags: make(map[nameTagKey]*ebiten.Image)}
 	g.bg = newBackground(g.m)
 	for i := range g.sprites {
 		g.sprites[i] = newGopherSprite(bodyColor(sim.Gender(i)))
@@ -58,14 +93,22 @@ func NewGame() *Game {
 	return g
 }
 
+func (g *Game) online() bool { return g.cfg.ServerURL != "" }
+
 func (g *Game) Layout(_, _ int) (int, int) { return screenW, screenH }
 
 func (g *Game) Update() error {
 	switch g.scene {
 	case sceneSelect:
 		g.updateSelect()
+	case sceneConnecting:
+		g.updateConnecting()
 	case sceneOffice:
 		g.updateOffice()
+	case sceneError:
+		if _, ok := justClicked(); ok || inpututil.IsKeyJustPressed(ebiten.KeyEnter) {
+			g.leave()
+		}
 	}
 	return nil
 }
@@ -74,8 +117,12 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	switch g.scene {
 	case sceneSelect:
 		g.drawSelect(screen)
+	case sceneConnecting:
+		g.drawMessage(screen, "Connecting...", "")
 	case sceneOffice:
 		g.drawOffice(screen)
+	case sceneError:
+		g.drawMessage(screen, "Disconnected", g.err+"\n\nClick to go back")
 	}
 	drawCredit(screen) // 常に最前面・画面中央
 }
@@ -108,16 +155,68 @@ func (g *Game) updateSelect() {
 		}
 	}
 	if choice >= 0 {
-		g.enterOffice(sim.Gender(choice))
+		g.enter(sim.Gender(choice))
 	}
 }
 
-func (g *Game) enterOffice(gender sim.Gender) {
-	g.gender = gender
-	g.me = sim.NewActor(sim.OfficeSpawn)
-	g.prevX, g.prevY = g.me.X, g.me.Y
-	g.frame, g.pendingClick = 0, nil
-	g.scene = sceneOffice
+// enter は選んだ性別で入室する。オンラインなら接続を始め、オフラインならすぐにオフィスに入る。
+func (g *Game) enter(gender sim.Gender) {
+	g.w = netcode.NewWorld(g.m)
+	g.frame, g.pendingClick, g.keys, g.lastDirX, g.lastDirY = 0, nil, [4]bool{}, 0, 0
+
+	name := g.cfg.Name
+	if !g.online() {
+		if name == "" {
+			name = "You"
+		}
+		g.w.JoinOffline(name, gender)
+		g.scene = sceneOffice
+		return
+	}
+
+	g.scene = sceneConnecting
+	g.dial = make(chan dialResult, 1)
+	hello := &officev1.Hello{
+		RoomToken: g.cfg.RoomToken,
+		Profile:   &officev1.Profile{DisplayName: name, Gender: wire.GenderToProto(gender)},
+	}
+	url := g.cfg.ServerURL
+	go func() { // 接続の待ち時間でゲームループを止めない
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		c, err := netcode.Dial(ctx, url, hello)
+		g.dial <- dialResult{c: c, err: err}
+	}()
+}
+
+func (g *Game) updateConnecting() {
+	select {
+	case r := <-g.dial:
+		if r.err != nil {
+			g.fail("Cannot connect to the server:\n" + r.err.Error())
+			return
+		}
+		g.conn = r.c
+		g.scene = sceneOffice
+	default:
+	}
+}
+
+func (g *Game) fail(msg string) {
+	if g.conn != nil {
+		g.conn.Close()
+		g.conn = nil
+	}
+	g.err, g.scene = msg, sceneError
+}
+
+// leave は接続を閉じて選択画面に戻る。
+func (g *Game) leave() {
+	if g.conn != nil {
+		g.conn.Close()
+		g.conn = nil
+	}
+	g.w, g.err, g.scene = nil, "", sceneSelect
 }
 
 func (g *Game) drawSelect(screen *ebiten.Image) {
@@ -143,13 +242,34 @@ func (g *Game) drawSelect(screen *ebiten.Image) {
 		drawText(screen, label, 18, float64(r.Min.X+r.Dx()/2), float64(r.Max.Y)-32, alignCenter, white)
 	}
 
-	drawText(screen, "Click a card or press 1 / 2 / 3", 16, screenW/2, 470, alignCenter, color.RGBA{0xb8, 0xc0, 0xd8, 0xff})
+	hint := "Click a card or press 1 / 2 / 3"
+	if !g.online() {
+		hint += "  (offline)"
+	}
+	drawText(screen, hint, 16, screenW/2, 470, alignCenter, color.RGBA{0xb8, 0xc0, 0xd8, 0xff})
+}
+
+// drawMessage は接続中・エラーなどの案内を画面の上のほうに出す（中央はクレジットのため空ける）。
+func (g *Game) drawMessage(screen *ebiten.Image, title, body string) {
+	screen.Fill(color.RGBA{0x1b, 0x20, 0x30, 0xff})
+	drawText(screen, title, 32, screenW/2, 90, alignCenter, color.RGBA{0xff, 0xff, 0xff, 0xff})
+	if body != "" {
+		drawText(screen, body, 16, screenW/2, 150, alignCenter, color.RGBA{0xb8, 0xc0, 0xd8, 0xff})
+	}
 }
 
 // --- オフィス ---
 
 func (g *Game) updateOffice() {
-	// 入力は毎フレーム読み取り、tick の境界で sim に反映する
+	if g.online() && !g.drainServer() {
+		return
+	}
+
+	if !g.w.Ready {
+		return // Welcome を待っている
+	}
+
+	// 入力は毎フレーム読み取り、tick の境界で反映する
 	if click, ok := justClicked(); ok {
 		tx, ty := click.X/tilePx, (click.Y-mapOffsetY)/tilePx
 		if click.Y >= mapOffsetY && g.m.In(tx, ty) {
@@ -173,9 +293,49 @@ func (g *Game) updateOffice() {
 	g.step()
 }
 
+// drainServer は届いているサーバのメッセージを世界に反映する。続行できなければ false。
+func (g *Game) drainServer() bool {
+	for {
+		select {
+		case m, ok := <-g.conn.Recv():
+			if !ok {
+				reason := "The connection was closed."
+				if err := g.conn.Err(); err != nil && !errors.Is(err, netcode.ErrClosed) {
+					reason = err.Error()
+				}
+				g.fail(reason)
+				return false
+			}
+			if err := g.w.Apply(m); err != nil {
+				g.fail(serverErrorText(err))
+				return false
+			}
+		default:
+			return true
+		}
+	}
+}
+
+func serverErrorText(err error) string {
+	var se *netcode.ServerError
+	if errors.As(err, &se) {
+		switch se.Code {
+		case officev1.ErrorCode_ERROR_CODE_FULL:
+			return "The room is full."
+		case officev1.ErrorCode_ERROR_CODE_BAD_TOKEN:
+			return "The invitation is invalid or expired."
+		case officev1.ErrorCode_ERROR_CODE_RATE_LIMITED:
+			return "Too many requests."
+		}
+		return se.Message
+	}
+	return err.Error()
+}
+
 // moveKeys は g.keys の添字と対応する移動キー（左・右・上・下）。
 var moveKeys = [4]ebiten.Key{ebiten.KeyA, ebiten.KeyD, ebiten.KeyW, ebiten.KeyS}
 
+// step は 1 tick 進める。自分の入力は先に反映（予測）しつつ、変化があったときだけサーバに送る。
 func (g *Game) step() {
 	dx, dy := 0, 0
 	if g.keys[0] {
@@ -194,17 +354,32 @@ func (g *Game) step() {
 
 	switch {
 	case dx != 0 || dy != 0:
-		g.me.SetDir(dx, dy) // 方向入力はクリック移動より優先
+		g.w.SetSelfDir(dx, dy) // 方向入力はクリック移動より優先
 		g.pendingClick = nil
+		if dx != g.lastDirX || dy != g.lastDirY {
+			g.send(&officev1.ClientMessage{Body: &officev1.ClientMessage_MoveDir{MoveDir: &officev1.MoveDir{Dx: int32(dx), Dy: int32(dy)}}}) //nolint:gosec // -1〜1
+		}
+		g.lastDirX, g.lastDirY = dx, dy
 	case g.pendingClick != nil:
-		g.me.MoveTo(g.m, *g.pendingClick)
+		p := *g.pendingClick
 		g.pendingClick = nil
-	default:
-		g.me.SetDir(0, 0)
+		if g.w.MoveSelfTo(p) {
+			g.send(&officev1.ClientMessage{Body: &officev1.ClientMessage_MoveTo{MoveTo: &officev1.MoveTo{X: int32(p.X), Y: int32(p.Y)}}}) //nolint:gosec // マップ内のタイル座標
+		}
+		g.lastDirX, g.lastDirY = 0, 0
+	case g.lastDirX != 0 || g.lastDirY != 0: // キーを離した
+		g.w.SetSelfDir(0, 0)
+		g.send(&officev1.ClientMessage{Body: &officev1.ClientMessage_MoveDir{MoveDir: &officev1.MoveDir{}}})
+		g.lastDirX, g.lastDirY = 0, 0
 	}
 
-	g.prevX, g.prevY = g.me.X, g.me.Y
-	g.me.Step(g.m)
+	g.w.Step()
+}
+
+func (g *Game) send(m *officev1.ClientMessage) {
+	if g.conn != nil {
+		g.conn.Send(m)
+	}
 }
 
 func (g *Game) drawOffice(screen *ebiten.Image) {
@@ -213,43 +388,50 @@ func (g *Game) drawOffice(screen *ebiten.Image) {
 	bgOp.GeoM.Translate(0, mapOffsetY)
 	screen.DrawImage(g.bg, bgOp)
 
+	if !g.w.Ready {
+		drawText(screen, "Joining...", 24, screenW/2, 60, alignCenter, color.RGBA{0xff, 0xff, 0xff, 0xff})
+		return
+	}
+	self := g.w.Self()
+
 	// クリック先のマーカー
-	if t, ok := g.me.Target(); ok {
+	if t, ok := self.Actor.Target(); ok {
 		cx := float32(t.X*tilePx + tilePx/2)
 		cy := float32(t.Y*tilePx + tilePx/2 + mapOffsetY)
 		vector.StrokeCircle(screen, cx, cy, 10, 2, color.RGBA{0xff, 0xff, 0xff, 0xb0}, true)
 	}
 
-	// 描画位置は直前の tick と現在の tick の間を線形補間する
+	// 描画位置は直前の tick と現在の tick の間を線形補間する。奥（y が小さい）から手前の順に描く
 	alpha := float64(g.frame) / framesPerTick
-	px := (float64(g.prevX) + float64(g.me.X-g.prevX)*alpha) * subToPx
-	py := (float64(g.prevY)+float64(g.me.Y-g.prevY)*alpha)*subToPx + mapOffsetY
-
-	// 将来、複数アバターを奥から手前の順に描くための入れ物（今は自分だけ）
-	type drawable struct {
-		x, y   float64
-		gender sim.Gender
-		name   string
+	g.items = g.items[:0]
+	for _, p := range g.w.Players {
+		x, y := p.RenderPos(alpha)
+		g.items = append(g.items, drawable{x: x * subToPx, y: y*subToPx + mapOffsetY, p: p})
 	}
-	items := []drawable{{px, py, g.gender, "You"}}
-	sort.SliceStable(items, func(i, j int) bool { return items[i].y < items[j].y })
+	sort.Slice(g.items, func(i, j int) bool {
+		if g.items[i].y != g.items[j].y {
+			return g.items[i].y < g.items[j].y
+		}
+		return g.items[i].p.ID < g.items[j].p.ID
+	})
 
-	for _, it := range items {
+	for _, it := range g.items {
 		op := &ebiten.DrawImageOptions{}
 		op.GeoM.Translate(it.x-spriteW/2, it.y-(spriteH-4)) // 足元が座標になるよう合わせる
-		screen.DrawImage(g.sprites[it.gender], op)
-		g.drawNameTag(screen, it.name, it.x, it.y-spriteH-2)
+		screen.DrawImage(g.sprites[it.p.Gender], op)
+
+		tag := g.nameTag(it.p.Name, it.p.ID == g.w.SelfID)
+		tw, th := tag.Bounds().Dx(), tag.Bounds().Dy()
+		tagOp := &ebiten.DrawImageOptions{}
+		tagOp.GeoM.Translate(it.x-float64(tw)/2, it.y-spriteH-2-float64(th))
+		screen.DrawImage(tag, tagOp)
 	}
 
-	drawText(screen, "WASD / Click to move", 14, 12, 4, alignLeft, color.RGBA{0xff, 0xff, 0xff, 0xc0})
-}
-
-func (g *Game) drawNameTag(screen *ebiten.Image, name string, cx, y float64) {
-	const size = 13.0
-	w, h := textSize(name, size)
-	boxW, boxH := w+10, h+4
-	vector.FillRect(screen, float32(cx-boxW/2), float32(y-boxH), float32(boxW), float32(boxH), color.RGBA{0x10, 0x14, 0x20, 0xb0}, false)
-	drawText(screen, name, size, cx, y-boxH+2, alignCenter, color.RGBA{0xff, 0xff, 0xff, 0xff})
+	hud := "WASD / Click to move"
+	if g.online() {
+		hud = fmt.Sprintf("Online %d/%d   %d ms   ", len(g.w.Players), g.w.MaxPlayers, g.conn.RTT().Milliseconds()) + hud
+	}
+	drawText(screen, hud, 14, 12, 4, alignLeft, color.RGBA{0xff, 0xff, 0xff, 0xc0})
 }
 
 // justClicked はマウスの左クリックまたはタッチが始まった位置を返す。

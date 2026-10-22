@@ -34,12 +34,24 @@ Cloudflare Tunnel → ingress-nginx
 ## クイックスタート
 
 ```bash
-make serve   # ブラウザ版（WASM）をビルドして http://localhost:8080 で配信
-make run     # デスクトップ版を起動
+make serve   # ブラウザ版（WASM）をオフラインでビルド・配信 → http://localhost:8080
+make dev     # ブラウザ版と GameServer（-local）を起動 → http://localhost:7654/?online=1
+make bot N=100   # 別のターミナルで。bot を 100 体つなぐ（Gopher で画面が埋まる）
+make run     # デスクトップ版を起動（オフライン）
 make test    # テスト
 ```
 
 操作: 起動後に Gopher（性別）を選ぶ。`WASD` で移動、マップをクリック（タップ）するとその地点へ歩く。
+
+ブラウザ版は URL のクエリで接続先を決める。何も付けなければオフライン（自分だけ）で動く。
+
+| クエリ | 意味 |
+|---|---|
+| `?online=1` | 同じオリジンの `/room` に接続する |
+| `?server=ws://host:7654/room` | 接続先を指定する |
+| `?name=たいち` | 表示名 |
+
+デスクトップ版は `go run ./cmd/client -server ws://localhost:7654/room -name たいち`。
 
 ## 開発ルール
 
@@ -53,9 +65,10 @@ make test    # テスト
 |---|---|---|
 | P0 | 設計（[docs/design.md](docs/design.md)） | ✅ |
 | P1 | `internal/sim`（マップ・衝突・経路探索・移動）、Gopher 3 色、背景、クレジット表示 | ✅ |
-| P2 | proto 定義、`cmd/gameserver`、オンライン接続、`cmd/bot`、招待URL入室 | ⬜ |
+| P2a | proto 定義、`cmd/gameserver`（`-local`）、クライアントのオンライン接続、`cmd/bot` | ✅ |
+| P2b | API（ゲスト認証、ワークスペース、招待URL入室、roomToken の検証） | ⬜ |
 | P3 | Agones 導入、Fleet、`cmd/gateway`、Tunnel 公開 | ⬜ |
-| P4 | 200 体の負荷試験、事前録画、LT リハーサル | ⬜ |
+| P4 | 200 体の負荷試験（Sync の帯域削減を含む）、事前録画、LT リハーサル | ⬜ |
 | P5 | P2P 音声通話、近接音声、動画 | ⬜ |
 | P6 | 複数ルーム・ワークスペース UI、永続アカウント | ⬜ |
 

@@ -32,7 +32,16 @@ func NewActor(t Point) *Actor {
 	return &Actor{X: tileCenter(t.X), Y: tileCenter(t.Y)}
 }
 
+// NewActorAt はサブユニット座標を直接指定して Actor を作る（サーバから受け取った位置の再現用）。
+func NewActorAt(x, y int) *Actor { return &Actor{X: x, Y: y} }
+
 func tileCenter(t int) int { return t<<SubShift + SubPerTile/2 }
+
+// Teleport は移動の意図（経路・方向）を保ったまま、位置だけを動かす（サーバの位置への補正用）。
+func (a *Actor) Teleport(x, y int) { a.X, a.Y = x, y }
+
+// Dir は現在の方向入力を返す。
+func (a *Actor) Dir() (dx, dy int) { return a.dirX, a.dirY }
 
 // Tile は現在いるタイルを返す。
 func (a *Actor) Tile() Point { return Point{a.X >> SubShift, a.Y >> SubShift} }
@@ -59,8 +68,12 @@ func (a *Actor) MoveTo(m *Map, t Point) bool {
 	if !ok {
 		return false
 	}
-	// 先頭に現在のタイルの中心を入れ、タイル中心からの移動に揃える
-	a.path = append([]Point{start}, path...)
+	if a.X == tileCenter(start.X) && a.Y == tileCenter(start.Y) {
+		a.path = path
+	} else {
+		// タイルの中心から外れている場合は、まず現在のタイルの中心へ寄ってから経路をたどる
+		a.path = append([]Point{start}, path...)
+	}
 	a.target, a.hasTarget = t, true
 	a.dirX, a.dirY = 0, 0
 	return true
