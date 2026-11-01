@@ -332,3 +332,24 @@ func TestRateLimiter(t *testing.T) {
 		t.Fatal("tokens must refill over time")
 	}
 }
+
+func TestDeferredIdleCountsFromArm(t *testing.T) {
+	var fired int
+	r := NewRoom(Config{IdleTimeout: time.Minute, DeferIdle: true, OnIdle: func() { fired++ }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	r.emptySince = time.Now().Add(-time.Hour) // 待機中にいくら経っても、数えない
+
+	r.step(time.Now().Add(time.Hour))
+	if fired != 0 {
+		t.Fatal("an unallocated server must never go idle")
+	}
+
+	r.Arm()
+	r.step(time.Now().Add(30 * time.Second))
+	if fired != 0 {
+		t.Fatal("must count from the allocation, not from the start")
+	}
+	r.step(time.Now().Add(2 * time.Minute))
+	if fired != 1 {
+		t.Fatalf("fired = %d, want 1", fired)
+	}
+}

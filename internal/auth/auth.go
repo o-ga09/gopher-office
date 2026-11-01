@@ -166,6 +166,12 @@ func NewRoomVerifier(roomSecret string, roomID func() string) (*RoomVerifier, er
 	return &RoomVerifier{key: []byte(roomSecret), RoomID: roomID, now: time.Now}, nil
 }
 
+// Claims は roomToken を検証し、中身を返す（ゲートウェイが、接続先の GameServer を知るために使う）。
+// ルームの一致は確認しない（ゲートウェイはルームを担当しない。GameServer が確認する）。
+func (v *RoomVerifier) Claims(token string) (RoomClaims, error) {
+	return parseRoomToken(v.key, v.now, token)
+}
+
 // Verify は roomToken を検証し、プレイヤー ID を返す。
 func (v *RoomVerifier) Verify(token string) (string, error) {
 	c, err := parseRoomToken(v.key, v.now, token)

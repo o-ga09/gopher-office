@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
+	"strings"
 
 	"github.com/o-ga09/gopher-office/internal/apiclient"
 	"github.com/o-ga09/gopher-office/internal/sim"
@@ -62,6 +64,15 @@ func updateProfile(ctx context.Context, api *apiclient.Client, name string, gend
 		name = me.DisplayName
 	}
 	return api.UpdateMe(ctx, name, gender)
+}
+
+// tokenQuery は、接続先の URL に付けるトークンのクエリを返す（URL にすでにクエリがあれば & でつなぐ）。
+func tokenQuery(serverURL, token string) string {
+	sep := "?"
+	if strings.Contains(serverURL, "?") {
+		sep = "&"
+	}
+	return sep + "token=" + url.QueryEscape(token)
 }
 
 // dialErrorText は接続の失敗を、利用者向けの文言にする。

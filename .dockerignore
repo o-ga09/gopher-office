@@ -1,0 +1,7 @@
+.git
+.github
+.env.dev
+web/game.wasm
+web/wasm_exec.js
+docs
+**/*_test.go

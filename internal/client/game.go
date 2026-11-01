@@ -252,7 +252,9 @@ func (g *Game) enter(gender sim.Gender) {
 				dial <- dialResult{err: err}
 				return
 			}
-			url, token = j.ServerURL, j.RoomToken
+			// ゲートウェイは接続先を決めるために、URL のトークンを見る（WebSocket はヘッダを付けられない）。
+			// GameServer は Hello のトークンを検証し、URL のほうは見ない
+			url, token = j.ServerURL+tokenQuery(j.ServerURL, j.RoomToken), j.RoomToken
 			if p.IconHash != nil {
 				iconHash = *p.IconHash
 			}
