@@ -14,6 +14,7 @@ import (
 	"github.com/labstack/echo/v5/middleware"
 
 	"github.com/o-ga09/gopher-office/internal/auth"
+	"github.com/o-ga09/gopher-office/internal/icon"
 )
 
 const (
@@ -88,12 +89,16 @@ func NewServer(cfg Config) (*echo.Echo, error) {
 	if len(cfg.CORSOrigins) > 0 {
 		e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 			AllowOrigins: cfg.CORSOrigins,
-			AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodPatch, http.MethodOptions},
+			AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodPatch, http.MethodPut, http.MethodOptions},
 			AllowHeaders: []string{"Authorization", "Content-Type"},
 			MaxAge:       600,
 		}))
 	}
-	e.Use(middleware.BodyLimit(maxBodyBytes))
+	// JSON は 8 KB まで。アイコンのアップロードだけは、ルーム側のミドルウェアで 256 KB に緩める
+	e.Use(middleware.BodyLimitWithConfig(middleware.BodyLimitConfig{
+		LimitBytes: maxBodyBytes,
+		Skipper:    func(c *echo.Context) bool { return c.Path() == iconUploadPath },
+	}))
 	e.Use(h.requestLog())
 
 	e.GET("/healthz", h.healthz)
@@ -101,11 +106,13 @@ func NewServer(cfg Config) (*echo.Echo, error) {
 	v1 := e.Group("/v1")
 	v1.POST("/guest", h.createGuest, ipLimiter(cfg.GuestPerMinute))
 	v1.GET("/workspaces/by-code/:code", h.getWorkspaceByCode)
+	v1.GET("/players/:id/icon", h.getIcon)
 
 	// 認証はルートごとに付ける。グループに付けると、存在しないパスにも認証が掛かり、404 が 401 になる
 	limit := playerLimiter(cfg.ActionPerMinute)
 	v1.GET("/me", h.getMe, h.requireAuth)
 	v1.PATCH("/me", h.updateMe, h.requireAuth)
+	v1.PUT("/me/icon", h.putIcon, h.requireAuth, limit, middleware.BodyLimit(icon.MaxUploadBytes))
 	v1.POST("/workspaces", h.createWorkspace, h.requireAuth, limit)
 	v1.POST("/workspaces/:code/join", h.joinWorkspace, h.requireAuth, limit)
 

@@ -3,9 +3,11 @@ package api
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/go-sql-driver/mysql"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 var (
@@ -26,6 +28,12 @@ type Store interface {
 	CreatePlayer(ctx context.Context, p *Player) error
 	GetPlayer(ctx context.Context, id string) (*Player, error)
 	UpdatePlayer(ctx context.Context, id string, u PlayerUpdate) (*Player, error)
+
+	// SetIcon はアイコン画像を保存し（同じ内容は重複して保存しない）、プレイヤーの icon_hash を更新する。
+	// プレイヤーがいなければ ErrNotFound。
+	SetIcon(ctx context.Context, playerID, hash string, data []byte) (*Player, error)
+	// GetIcon はプレイヤーのアイコン画像とそのハッシュを返す。プレイヤーがいない、またはアイコンが無ければ ErrNotFound。
+	GetIcon(ctx context.Context, playerID string) (hash string, data []byte, err error)
 
 	CountWorkspacesByOwner(ctx context.Context, ownerID string) (int64, error)
 	// CreateWorkspace はワークスペースとルームを 1 つのトランザクションで作る。招待コードが重複したら ErrDuplicate。
@@ -79,6 +87,37 @@ func (s *GormStore) UpdatePlayer(ctx context.Context, id string, u PlayerUpdate)
 		return nil, err
 	}
 	return &p, nil
+}
+
+func (s *GormStore) SetIcon(ctx context.Context, playerID, hash string, data []byte) (*Player, error) {
+	var p Player
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.First(&p, "id = ?", playerID).Error; err != nil {
+			return mapNotFound(err)
+		}
+		icon := PlayerIcon{Hash: hash, Data: data, CreatedAt: time.Now().UTC()}
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&icon).Error; err != nil {
+			return err
+		}
+		p.IconHash = &hash
+		return tx.Model(&p).Update("icon_hash", hash).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+func (s *GormStore) GetIcon(ctx context.Context, playerID string) (string, []byte, error) {
+	var icon PlayerIcon
+	err := s.db.WithContext(ctx).
+		Joins("JOIN players ON players.icon_hash = player_icons.hash").
+		Where("players.id = ?", playerID).
+		First(&icon).Error
+	if err != nil {
+		return "", nil, mapNotFound(err)
+	}
+	return icon.Hash, icon.Data, nil
 }
 
 func (s *GormStore) CountWorkspacesByOwner(ctx context.Context, ownerID string) (int64, error) {

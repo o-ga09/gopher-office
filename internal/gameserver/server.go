@@ -10,6 +10,7 @@ import (
 	"github.com/coder/websocket"
 
 	officev1 "github.com/o-ga09/gopher-office/gen/office/v1"
+	"github.com/o-ga09/gopher-office/internal/icon"
 	"github.com/o-ga09/gopher-office/internal/profile"
 	"github.com/o-ga09/gopher-office/internal/wire"
 )
@@ -134,7 +135,7 @@ func (s *Server) handshake(ctx context.Context, ws *websocket.Conn) (*conn, bool
 	p := &officev1.Profile{
 		DisplayName: profile.CleanName(hello.GetProfile().GetDisplayName()),
 		Gender:      wire.GenderToProto(wire.GenderFromProto(hello.GetProfile().GetGender())),
-		IconHash:    truncate(hello.GetProfile().GetIconHash(), 64),
+		IconHash:    validIconHash(hello.GetProfile().GetIconHash()),
 	}
 	return newConn(id, p), true
 }
@@ -205,6 +206,15 @@ func (s *Server) readLoop(ctx context.Context, ws *websocket.Conn, c *conn) {
 			}
 		}
 	}
+}
+
+// validIconHash は、アイコンのハッシュとして正しい形式（小文字 16 進数 64 文字）のものだけを通す。
+// 他のクライアントの URL 組み立てに使われるので、任意の文字列は載せない。
+func validIconHash(s string) string {
+	if icon.ValidHash(s) {
+		return s
+	}
+	return ""
 }
 
 func truncate(s string, n int) string {
