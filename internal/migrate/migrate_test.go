@@ -2,6 +2,7 @@ package migrate
 
 import (
 	"context"
+	"io/fs"
 	"reflect"
 	"sync"
 	"testing"
@@ -45,7 +46,7 @@ func TestUpAppliesOnceAndIsIdempotent(t *testing.T) {
 	if len(applied) == 0 || applied[0] != "0001_init" {
 		t.Fatalf("applied = %v", applied)
 	}
-	for _, table := range []string{"players", "workspaces", "rooms", "schema_migrations"} {
+	for _, table := range []string{"players", "player_icons", "workspaces", "rooms", "schema_migrations"} {
 		var n int
 		if err := db.QueryRow("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?", table).Scan(&n); err != nil || n != 1 {
 			t.Fatalf("table %s missing (n=%d err=%v)", table, n, err)
@@ -88,8 +89,13 @@ func TestUpIsSafeUnderConcurrency(t *testing.T) {
 	if len(runErrs) > 0 {
 		t.Fatalf("concurrent Up failed: %v", runErrs)
 	}
-	if total != 1 {
-		t.Fatalf("exactly one runner must apply 0001_init, applied %d times in total", total)
+	// 各マイグレーションは、どれか 1 つのランナーだけが適用する
+	names, err := fs.Glob(files, "sql/*.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != len(names) {
+		t.Fatalf("each migration must be applied exactly once: applied %d in total, want %d", total, len(names))
 	}
 }
 

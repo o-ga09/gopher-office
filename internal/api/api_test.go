@@ -30,6 +30,7 @@ type memStore struct {
 	players    map[string]*Player
 	workspaces map[string]*Workspace
 	rooms      map[string]*Room
+	icons      map[string][]byte // hash -> PNG
 
 	forceDuplicates int   // CreateWorkspace が ErrDuplicate を返す回数
 	failCreate      error // CreatePlayer が返すエラー
@@ -37,7 +38,7 @@ type memStore struct {
 }
 
 func newMemStore() *memStore {
-	return &memStore{players: map[string]*Player{}, workspaces: map[string]*Workspace{}, rooms: map[string]*Room{}}
+	return &memStore{players: map[string]*Player{}, workspaces: map[string]*Workspace{}, rooms: map[string]*Room{}, icons: map[string][]byte{}}
 }
 
 func (s *memStore) CreatePlayer(_ context.Context, p *Player) error {
@@ -77,6 +78,29 @@ func (s *memStore) UpdatePlayer(_ context.Context, id string, u PlayerUpdate) (*
 	}
 	cp := *p
 	return &cp, nil
+}
+
+func (s *memStore) SetIcon(_ context.Context, playerID, hash string, data []byte) (*Player, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.players[playerID]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	s.icons[hash] = append([]byte(nil), data...)
+	p.IconHash = &hash
+	cp := *p
+	return &cp, nil
+}
+
+func (s *memStore) GetIcon(_ context.Context, playerID string) (string, []byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.players[playerID]
+	if !ok || p.IconHash == nil {
+		return "", nil, ErrNotFound
+	}
+	return *p.IconHash, s.icons[*p.IconHash], nil
 }
 
 func (s *memStore) CountWorkspacesByOwner(_ context.Context, ownerID string) (int64, error) {

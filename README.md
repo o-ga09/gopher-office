@@ -85,7 +85,7 @@ make invite       # ワークスペースを作って招待 URL を表示する
 | P1 | `internal/sim`（マップ・衝突・経路探索・移動）、Gopher 3 色、背景、クレジット表示 | ✅ |
 | P2a | proto 定義、`cmd/gameserver`（`-local`）、クライアントのオンライン接続、`cmd/bot` | ✅ |
 | P2b | API（ゲスト認証、ワークスペース、招待URL入室、roomToken の検証）、マイグレーション | ✅ |
-| P2c | アイコン画像のアップロード・配信、プロフィール編集の UI | ⬜ |
+| P2c | アイコン画像のアップロード・配信、プロフィール編集の UI | ✅ |
 | P3 | Agones 導入、Fleet、`cmd/gateway`、Tunnel 公開 | ⬜ |
 | P4 | 200 体の負荷試験（Sync の帯域削減を含む）、事前録画、LT リハーサル | ⬜ |
 | P5 | P2P 音声通話、近接音声、動画 | ⬜ |

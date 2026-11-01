@@ -8,6 +8,7 @@ import (
 	"image"
 	"image/color"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -15,7 +16,9 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/vector"
 
 	officev1 "github.com/o-ga09/gopher-office/gen/office/v1"
+	"github.com/o-ga09/gopher-office/internal/apiclient"
 	"github.com/o-ga09/gopher-office/internal/netcode"
+	"github.com/o-ga09/gopher-office/internal/profile"
 	"github.com/o-ga09/gopher-office/internal/sim"
 	"github.com/o-ga09/gopher-office/internal/wire"
 )
@@ -31,6 +34,16 @@ type Config struct {
 	InviteCode string
 	APIBase    string     // API のベース URL（例: http://localhost:8080）
 	Store      TokenStore // playerToken の保存先。nil なら保存しない（毎回新しいゲストになる）
+
+	// IconPicker はアイコン画像を選ばせる。ブラウザ版だけが実装する（デスクトップ版は nil で、アイコンは設定できない）。
+	IconPicker IconPicker
+}
+
+// IconPicker は、利用者に画像ファイルを選ばせる。
+type IconPicker interface {
+	// Pick は選択ダイアログを開く。選ばれたら、PNG に変換して（一辺 256px 以下に縮小して）done を呼ぶ。
+	// 取り消されたときは done を呼ばなくてよい。done は別の goroutine から呼んでよい。
+	Pick(done func(pngData []byte, err error))
 }
 
 // TokenStore は playerToken の保存先。ブラウザでは localStorage を使う。
@@ -83,6 +96,18 @@ type Game struct {
 
 	nameTags map[nameTagKey]*ebiten.Image
 	items    []drawable
+
+	// プロフィール編集（選択画面）
+	icons       *iconCache
+	nameField   textField
+	pickCh      chan pickResult
+	profileCh   chan apiclient.Player // 前回のプロフィール（トークンが残っているとき）
+	prevProfile *apiclient.Player
+	iconPNG     []byte        // 選んだアイコン（PNG）。入室時にアップロードする
+	iconPreview *ebiten.Image // 選んだアイコンのプレビュー
+	pickErr     string
+	fieldRect   image.Rectangle
+	iconBtnRect image.Rectangle
 }
 
 type drawable struct {
@@ -92,7 +117,16 @@ type drawable struct {
 
 // NewGame は選択画面から始まる Game を作る。
 func NewGame(cfg Config) *Game {
-	g := &Game{cfg: cfg, m: sim.OfficeMap(), hoverCard: -1, nameTags: make(map[nameTagKey]*ebiten.Image)}
+	g := &Game{
+		cfg: cfg, m: sim.OfficeMap(), hoverCard: -1, nameTags: make(map[nameTagKey]*ebiten.Image),
+		icons:     newIconCache(cfg.APIBase),
+		nameField: textField{max: profile.MaxNameRunes},
+		pickCh:    make(chan pickResult, 1),
+		profileCh: make(chan apiclient.Player, 1),
+	}
+	g.nameField.set(cfg.Name)
+	g.layoutProfilePanel()
+	g.loadPreviousProfile()
 	g.bg = newBackground(g.m)
 	for i := range g.sprites {
 		g.sprites[i] = newGopherSprite(bodyColor(sim.Gender(i)))
@@ -111,6 +145,7 @@ func (g *Game) online() bool { return g.cfg.ServerURL != "" || g.cfg.InviteCode 
 func (g *Game) Layout(_, _ int) (int, int) { return screenW, screenH }
 
 func (g *Game) Update() error {
+	g.icons.update()
 	switch g.scene {
 	case sceneSelect:
 		g.updateSelect()
@@ -143,6 +178,9 @@ func (g *Game) Draw(screen *ebiten.Image) {
 // --- 性別選択 ---
 
 func (g *Game) updateSelect() {
+	g.pollProfileAsync()
+	g.nameField.update()
+
 	g.hoverCard = -1
 	mx, my := ebiten.CursorPosition()
 	for i, r := range g.cardRects {
@@ -152,15 +190,21 @@ func (g *Game) updateSelect() {
 	}
 
 	choice := -1
-	switch {
-	case inpututil.IsKeyJustPressed(ebiten.Key1):
-		choice = 0
-	case inpututil.IsKeyJustPressed(ebiten.Key2):
-		choice = 1
-	case inpututil.IsKeyJustPressed(ebiten.Key3):
-		choice = 2
+	if !g.nameField.focused { // 名前を入力しているときは、数字キーを文字として扱う
+		switch {
+		case inpututil.IsKeyJustPressed(ebiten.Key1):
+			choice = 0
+		case inpututil.IsKeyJustPressed(ebiten.Key2):
+			choice = 1
+		case inpututil.IsKeyJustPressed(ebiten.Key3):
+			choice = 2
+		}
 	}
 	if click, ok := justClicked(); ok {
+		g.nameField.focused = click.In(g.fieldRect)
+		if g.canPickIcon() && click.In(g.iconBtnRect) {
+			g.pickIcon()
+		}
 		for i, r := range g.cardRects {
 			if click.In(r) {
 				choice = i
@@ -177,7 +221,12 @@ func (g *Game) enter(gender sim.Gender) {
 	g.w = netcode.NewWorld(g.m)
 	g.frame, g.pendingClick, g.keys, g.lastDirX, g.lastDirY = 0, nil, [4]bool{}, 0, 0
 
-	name := g.cfg.Name
+	name := strings.TrimSpace(g.nameField.String())
+	if name == "" {
+		name = g.cfg.Name
+	}
+	iconPNG := g.iconPNG
+	g.nameField.focused = false
 	if !g.online() {
 		if name == "" {
 			name = "You"
@@ -196,17 +245,21 @@ func (g *Game) enter(gender sim.Gender) {
 		defer cancel()
 
 		url, token := cfg.ServerURL, cfg.RoomToken
+		iconHash := ""
 		if cfg.InviteCode != "" {
-			j, err := joinViaAPI(ctx, cfg, name, gender)
+			j, p, err := joinViaAPI(ctx, cfg, name, gender, iconPNG)
 			if err != nil {
 				dial <- dialResult{err: err}
 				return
 			}
 			url, token = j.ServerURL, j.RoomToken
+			if p.IconHash != nil {
+				iconHash = *p.IconHash
+			}
 		}
 		c, err := netcode.Dial(ctx, url, &officev1.Hello{
 			RoomToken: token,
-			Profile:   &officev1.Profile{DisplayName: name, Gender: wire.GenderToProto(gender)},
+			Profile:   &officev1.Profile{DisplayName: name, Gender: wire.GenderToProto(gender), IconHash: iconHash},
 		})
 		dial <- dialResult{c: c, err: err}
 	}()
@@ -270,11 +323,13 @@ func (g *Game) drawSelect(screen *ebiten.Image) {
 		drawText(screen, label, 18, float64(r.Min.X+r.Dx()/2), float64(r.Max.Y)-32, alignCenter, white)
 	}
 
+	g.drawProfilePanel(screen)
+
 	hint := "Click a card or press 1 / 2 / 3"
 	if !g.online() {
 		hint += "  (offline)"
 	}
-	drawText(screen, hint, 16, screenW/2, 470, alignCenter, color.RGBA{0xb8, 0xc0, 0xd8, 0xff})
+	drawText(screen, hint, 16, screenW/2, 580, alignCenter, color.RGBA{0xb8, 0xc0, 0xd8, 0xff})
 }
 
 // drawMessage は接続中・エラーなどの案内を画面の上のほうに出す（中央はクレジットのため空ける）。
@@ -448,7 +503,8 @@ func (g *Game) drawOffice(screen *ebiten.Image) {
 		op.GeoM.Translate(it.x-spriteW/2, it.y-(spriteH-4)) // 足元が座標になるよう合わせる
 		screen.DrawImage(g.sprites[it.p.Gender], op)
 
-		tag := g.nameTag(it.p.Name, it.p.ID == g.w.SelfID)
+		iconImg, st := g.icons.get(it.p.ID, it.p.IconHash)
+		tag := g.nameTag(it.p.Name, it.p.ID == g.w.SelfID, st, it.p.IconHash, iconImg)
 		tw, th := tag.Bounds().Dx(), tag.Bounds().Dy()
 		tagOp := &ebiten.DrawImageOptions{}
 		tagOp.GeoM.Translate(it.x-float64(tw)/2, it.y-spriteH-2-float64(th))

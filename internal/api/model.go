@@ -12,6 +12,13 @@ type Player struct {
 	CreatedAt   time.Time `gorm:"precision:3;not null"`
 }
 
+// PlayerIcon はアイコン画像（再エンコード後の PNG）。Hash は Data の SHA-256 で、Player.IconHash が指す。
+type PlayerIcon struct {
+	Hash      string    `gorm:"primaryKey;size:64"`
+	Data      []byte    `gorm:"type:mediumblob;not null"`
+	CreatedAt time.Time `gorm:"precision:3;not null"`
+}
+
 // Workspace は招待 URL が指す単位。
 type Workspace struct {
 	ID         string    `gorm:"primaryKey;size:26"`

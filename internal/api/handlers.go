@@ -21,6 +21,8 @@ const (
 	defaultMaxPlayers     = 200
 	defaultMapID          = "office-1"
 	inviteCodeRetries     = 5
+
+	iconUploadPath = "/v1/me/icon"
 )
 
 // --- 認証 ---

@@ -1,10 +1,12 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -224,5 +226,42 @@ func TestConcurrentWorkspaceCreationYieldsUniqueCodes(t *testing.T) {
 	wg.Wait()
 	if len(codes) != n {
 		t.Fatalf("got %d distinct codes for %d workspaces", len(codes), n)
+	}
+}
+
+func TestGormStoreIcons(t *testing.T) {
+	s := newGormStore(t)
+	ctx := context.Background()
+	a, b := newPlayer("a"), newPlayer("b")
+	for _, p := range []*Player{a, b} {
+		if err := s.CreatePlayer(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := s.GetIcon(ctx, a.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("no icon yet: err = %v", err)
+	}
+
+	hash := strings.Repeat("ab", 32)
+	data := []byte("\x89PNG-fake-data")
+	got, err := s.SetIcon(ctx, a.ID, hash, data)
+	if err != nil || got.IconHash == nil || *got.IconHash != hash {
+		t.Fatalf("got %+v err=%v", got, err)
+	}
+	// 同じ内容を別のプレイヤーが設定しても、重複エラーにならず、同じ画像を共有する
+	if _, err := s.SetIcon(ctx, b.ID, hash, data); err != nil {
+		t.Fatalf("the same icon for another player: %v", err)
+	}
+	for _, id := range []string{a.ID, b.ID} {
+		h, d, err := s.GetIcon(ctx, id)
+		if err != nil || h != hash || !bytes.Equal(d, data) {
+			t.Fatalf("GetIcon(%s) = %q %q err=%v", id, h, d, err)
+		}
+	}
+	if p, _ := s.GetPlayer(ctx, a.ID); p.IconHash == nil || *p.IconHash != hash {
+		t.Fatalf("players.icon_hash must be persisted: %+v", p)
+	}
+	if _, err := s.SetIcon(ctx, ulid.Make().String(), hash, data); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing player: err = %v", err)
 	}
 }
