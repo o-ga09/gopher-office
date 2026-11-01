@@ -109,8 +109,11 @@ func (g *Gateway) handleRoom(w http.ResponseWriter, r *http.Request) {
 	}
 
 	dctx, cancel := context.WithTimeout(r.Context(), dialTimeout)
-	up, _, err := websocket.Dial(dctx, "ws://"+addr+"/room", nil)
+	up, resp, err := websocket.Dial(dctx, "ws://"+addr+"/room", nil)
 	cancel()
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
 	if err != nil {
 		g.log.Warn("dial game server failed", "gs", claims.GameServer, "err", err)
 		http.Error(w, "room is unavailable", http.StatusBadGateway)

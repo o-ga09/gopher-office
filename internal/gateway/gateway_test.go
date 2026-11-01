@@ -20,8 +20,8 @@ import (
 )
 
 const (
-	playerSecret = "gw-test-player-secret-0123456789-012345"
-	roomSecret   = "gw-test-room-secret-0123456789-0123456"
+	testPlayerKey = "gw-test-player-secret-0123456789-012345"
+	testRoomKey   = "gw-test-room-secret-0123456789-0123456"
 )
 
 var quiet = slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -38,11 +38,11 @@ func (r staticResolver) Resolve(_ context.Context, gs string) (string, error) {
 // startStack は GameServer（実物）とゲートウェイを起動し、ゲートウェイの WebSocket URL（token なし）を返す。
 func startStack(t *testing.T) (gwURL string, signer *auth.Signer) {
 	t.Helper()
-	signer, err := auth.NewSigner(playerSecret, roomSecret)
+	signer, err := auth.NewSigner(testPlayerKey, testRoomKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	verifier, err := auth.NewRoomVerifier(roomSecret, func() string { return "room-1" })
+	verifier, err := auth.NewRoomVerifier(testRoomKey, func() string { return "room-1" })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func startStack(t *testing.T) (gwURL string, signer *auth.Signer) {
 	go func() { gs.Room().Run(ctx); close(done) }()
 	gsSrv := httptest.NewServer(gs.Handler())
 
-	gwVerifier, err := auth.NewRoomVerifier(roomSecret, nil)
+	gwVerifier, err := auth.NewRoomVerifier(testRoomKey, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestRejectsBadTokensBeforeConnecting(t *testing.T) {
 	url, signer := startStack(t)
 	httpURL := "http" + strings.TrimPrefix(url, "ws")
 
-	otherSigner, _ := auth.NewSigner(playerSecret, "another-room-secret-0123456789-0123456")
+	otherSigner, _ := auth.NewSigner(testPlayerKey, "another-room-secret-0123456789-0123456")
 	playerTok, _ := signer.IssuePlayerToken("p")
 	cases := map[string]struct {
 		query string
