@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"image"
 	"image/color"
 	"image/png"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/o-ga09/gopher-office/internal/blob"
 	"github.com/o-ga09/gopher-office/internal/icon"
 )
 
@@ -172,5 +174,83 @@ func TestReuploadingTheSameImageKeepsTheHash(t *testing.T) {
 	}
 	if a, b := h(), h(); a != b {
 		t.Fatalf("hashes differ: %s vs %s", a, b)
+	}
+}
+
+func TestIconBlobs(t *testing.T) {
+	put := func(env *testEnv, token string) string {
+		res := env.doRaw(http.MethodPut, "/v1/me/icon", token, testPNG(t, 64, 64, color.NRGBA{9, 8, 7, 255}))
+		if res.Code != http.StatusOK {
+			t.Fatalf("PUT status %d", res.Code)
+		}
+		return res.json(t)["player"].(map[string]any)["icon_hash"].(string)
+	}
+
+	t.Run("blob と DB に二重に書き、blob から返す", func(t *testing.T) {
+		blobs := blob.NewMemory()
+		env := newTestEnv(t, func(c *Config) { c.Blobs = blobs })
+		id, token := env.guest(t, "alice", 0)
+		hash := put(env, token)
+		inBlob, err := blobs.Get(context.Background(), "icons/"+hash+".png")
+		if err != nil {
+			t.Fatalf("blob not written: %v", err)
+		}
+		if !bytes.Equal(env.store.icons[hash], inBlob) {
+			t.Fatal("DB and blob must hold the same bytes")
+		}
+		// blob だけを書き換えて、blob から返していることを確かめる
+		marker := []byte("from-blob")
+		_ = blobs.Put(context.Background(), "icons/"+hash+".png", marker, "image/png")
+		res := env.doRaw(http.MethodGet, "/v1/players/"+id+"/icon?h="+hash, "", nil)
+		if res.Code != http.StatusOK || !bytes.Equal(res.Body.Bytes(), marker) {
+			t.Fatalf("status %d body %q", res.Code, res.Body.String())
+		}
+		if res.Header().Get("ETag") != `"`+hash+`"` || res.Header().Get("Cache-Control") != cacheImmutable {
+			t.Fatalf("headers: %v", res.Header())
+		}
+	})
+
+	t.Run("blob に無ければ DB にフォールバックする", func(t *testing.T) {
+		blobs := blob.NewMemory()
+		env := newTestEnv(t, func(c *Config) { c.Blobs = blobs })
+		id, token := env.guest(t, "bob", 0)
+		hash := put(env, token)
+		env2 := newTestEnv(t, func(c *Config) { c.Blobs = blob.NewMemory() }) // 空の blob
+		env2.store.players, env2.store.icons = env.store.players, env.store.icons
+		res := env2.doRaw(http.MethodGet, "/v1/players/"+id+"/icon", "", nil)
+		if res.Code != http.StatusOK || !bytes.Equal(res.Body.Bytes(), env.store.icons[hash]) {
+			t.Fatalf("status %d", res.Code)
+		}
+		if res.Header().Get("Cache-Control") != cacheRevalidate {
+			t.Fatalf("headers: %v", res.Header())
+		}
+	})
+
+	t.Run("Blobs が nil なら従来どおり DB だけ", func(t *testing.T) {
+		env := newTestEnv(t)
+		id, token := env.guest(t, "carol", 0)
+		hash := put(env, token)
+		res := env.doRaw(http.MethodGet, "/v1/players/"+id+"/icon", "", nil)
+		if res.Code != http.StatusOK || !bytes.Equal(res.Body.Bytes(), env.store.icons[hash]) {
+			t.Fatalf("status %d", res.Code)
+		}
+	})
+}
+
+func TestGetIconConditionalRequestDoesNotReadTheBody(t *testing.T) {
+	env := newTestEnv(t)
+	id, token := env.guest(t, "alice", 0)
+	res := env.doRaw(http.MethodPut, "/v1/me/icon", token, testPNG(t, 64, 64, color.NRGBA{1, 2, 3, 255}))
+	hash := res.json(t)["player"].(map[string]any)["icon_hash"].(string)
+	path := "/v1/players/" + id + "/icon"
+
+	// 本体を消す。304 は本体を読まずに返せるはずだが、条件なしの GET は 404 になる
+	env.store.icons = map[string][]byte{}
+	if r := env.doRaw(http.MethodGet, path, "", nil); r.Code != http.StatusNotFound {
+		t.Fatalf("without the body, an unconditional GET must be 404: %d", r.Code)
+	}
+	r := env.doRaw(http.MethodGet, path, "", nil, "If-None-Match", `"`+hash+`"`)
+	if r.Code != http.StatusNotModified || r.Header().Get("ETag") != `"`+hash+`"` {
+		t.Fatalf("status %d etag %q", r.Code, r.Header().Get("ETag"))
 	}
 }

@@ -31,6 +31,8 @@ type memStore struct {
 	workspaces map[string]*Workspace
 	rooms      map[string]*Room
 	icons      map[string][]byte // hash -> PNG
+	members    map[[2]string]*WorkspaceMember
+	failMember error // UpsertMember が返すエラー
 
 	forceDuplicates int   // CreateWorkspace が ErrDuplicate を返す回数
 	failCreate      error // CreatePlayer が返すエラー
@@ -39,114 +41,6 @@ type memStore struct {
 
 func newMemStore() *memStore {
 	return &memStore{players: map[string]*Player{}, workspaces: map[string]*Workspace{}, rooms: map[string]*Room{}, icons: map[string][]byte{}}
-}
-
-func (s *memStore) CreatePlayer(_ context.Context, p *Player) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.failCreate != nil {
-		return s.failCreate
-	}
-	cp := *p
-	s.players[p.ID] = &cp
-	return nil
-}
-
-func (s *memStore) GetPlayer(_ context.Context, id string) (*Player, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	p, ok := s.players[id]
-	if !ok {
-		return nil, ErrNotFound
-	}
-	cp := *p
-	return &cp, nil
-}
-
-func (s *memStore) UpdatePlayer(_ context.Context, id string, u PlayerUpdate) (*Player, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	p, ok := s.players[id]
-	if !ok {
-		return nil, ErrNotFound
-	}
-	if u.DisplayName != nil {
-		p.DisplayName = *u.DisplayName
-	}
-	if u.Gender != nil {
-		p.Gender = *u.Gender
-	}
-	cp := *p
-	return &cp, nil
-}
-
-func (s *memStore) SetIcon(_ context.Context, playerID, hash string, data []byte) (*Player, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	p, ok := s.players[playerID]
-	if !ok {
-		return nil, ErrNotFound
-	}
-	s.icons[hash] = append([]byte(nil), data...)
-	p.IconHash = &hash
-	cp := *p
-	return &cp, nil
-}
-
-func (s *memStore) GetIcon(_ context.Context, playerID string) (string, []byte, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	p, ok := s.players[playerID]
-	if !ok || p.IconHash == nil {
-		return "", nil, ErrNotFound
-	}
-	return *p.IconHash, s.icons[*p.IconHash], nil
-}
-
-func (s *memStore) CountWorkspacesByOwner(_ context.Context, ownerID string) (int64, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var n int64
-	for _, w := range s.workspaces {
-		if w.OwnerID == ownerID {
-			n++
-		}
-	}
-	return n, nil
-}
-
-func (s *memStore) CreateWorkspace(_ context.Context, w *Workspace, r *Room) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.forceDuplicates > 0 {
-		s.forceDuplicates--
-		return ErrDuplicate
-	}
-	for _, o := range s.workspaces {
-		if o.InviteCode == w.InviteCode {
-			return ErrDuplicate
-		}
-	}
-	cw, cr := *w, *r
-	s.workspaces[w.ID], s.rooms[r.ID] = &cw, &cr
-	return nil
-}
-
-func (s *memStore) GetWorkspaceByCode(_ context.Context, code string) (*Workspace, *Room, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, w := range s.workspaces {
-		if w.InviteCode != code {
-			continue
-		}
-		for _, r := range s.rooms {
-			if r.WorkspaceID == w.ID {
-				cw, cr := *w, *r
-				return &cw, &cr, nil
-			}
-		}
-	}
-	return nil, nil, ErrNotFound
 }
 
 func (s *memStore) Ping(context.Context) error { return s.pingErr }
@@ -172,6 +66,7 @@ func newTestEnv(t *testing.T, mutate ...func(*Config)) *testEnv {
 	store := newMemStore()
 	cfg := Config{
 		Store:     store,
+		Accounts:  newMemAccounts(store),
 		Signer:    signer,
 		Allocator: StaticAllocator{URL: "ws://gs.example/room"},
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),

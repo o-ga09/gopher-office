@@ -30,10 +30,13 @@ func (g *Game) layoutProfilePanel() {
 	y := profilePanelY + 22
 	g.fieldRect = image.Rect(profilePanelX+previewSize+20, y, profilePanelX+previewSize+20+296, y+36)
 	g.iconBtnRect = image.Rect(g.fieldRect.Max.X+16, y, g.fieldRect.Max.X+16+164, y+36)
+	by := g.fieldRect.Max.Y + 16
+	g.workspacesBtnRect = image.Rect(g.fieldRect.Min.X, by, g.fieldRect.Min.X+170, by+32)
+	g.signInBtnRect = image.Rect(g.workspacesBtnRect.Max.X+16, by, g.workspacesBtnRect.Max.X+16+120, by+32)
 }
 
 // canPickIcon は、アイコンを設定できるかを返す。API（ゲストの登録）を通す入室で、かつブラウザ版のときだけ。
-func (g *Game) canPickIcon() bool { return g.cfg.InviteCode != "" && g.cfg.IconPicker != nil }
+func (g *Game) canPickIcon() bool { return g.inviteCode != "" && g.cfg.IconPicker != nil }
 
 // pickIcon は画像の選択ダイアログを開く。
 func (g *Game) pickIcon() {
@@ -49,7 +52,7 @@ func (g *Game) pickIcon() {
 
 // loadPreviousProfile は、前回のトークンが残っていれば、前回の名前とアイコンを取ってくる。
 func (g *Game) loadPreviousProfile() {
-	if g.cfg.InviteCode == "" || g.cfg.Store == nil {
+	if g.inviteCode == "" || g.cfg.Store == nil {
 		return
 	}
 	tok := g.cfg.Store.Load()
@@ -151,10 +154,43 @@ func (g *Game) drawProfilePanel(screen *ebiten.Image) {
 		vector.FillRect(screen, float32(b.Min.X), float32(b.Min.Y), float32(b.Dx()), float32(b.Dy()), bg, false)
 		vector.StrokeRect(screen, float32(b.Min.X), float32(b.Min.Y), float32(b.Dx()), float32(b.Dy()), 1, color.RGBA{0xff, 0xff, 0xff, 0x80}, false)
 		drawText(screen, "Choose icon...", 16, float64(b.Min.X+b.Dx()/2), float64(b.Min.Y+8), alignCenter, white)
-	case g.cfg.InviteCode != "":
+	case g.inviteCode != "":
 		drawText(screen, "Icons can be set in the\nbrowser version", 13, float64(g.iconBtnRect.Min.X), float64(g.iconBtnRect.Min.Y), alignLeft, muted)
 	}
+	g.drawProfileButtons(screen)
 	if g.pickErr != "" {
 		drawText(screen, g.pickErr, 14, float64(g.fieldRect.Min.X), float64(g.fieldRect.Max.Y+10), alignLeft, color.RGBA{0xff, 0x8a, 0x8a, 0xff})
+	}
+}
+
+// clickProfileButtons は、プロフィール画面の「My workspaces」「Sign in」のクリックを扱う。ホーム画面のときだけ有効。
+func (g *Game) clickProfileButtons(click image.Point) {
+	if !g.cfg.Home {
+		return
+	}
+	switch {
+	case click.In(g.workspacesBtnRect):
+		g.scene = sceneLobby
+	case click.In(g.signInBtnRect):
+		g.scene = sceneAccount
+	}
+}
+
+func (g *Game) drawProfileButtons(screen *ebiten.Image) {
+	if !g.cfg.Home {
+		return
+	}
+	mx, my := ebiten.CursorPosition()
+	for _, b := range []struct {
+		r     image.Rectangle
+		label string
+	}{{g.workspacesBtnRect, "My workspaces"}, {g.signInBtnRect, "Sign in"}} {
+		bg := color.RGBA{0x26, 0x2d, 0x44, 0xff}
+		if image.Pt(mx, my).In(b.r) {
+			bg = color.RGBA{0x34, 0x3e, 0x5e, 0xff}
+		}
+		vector.FillRect(screen, float32(b.r.Min.X), float32(b.r.Min.Y), float32(b.r.Dx()), float32(b.r.Dy()), bg, false)
+		vector.StrokeRect(screen, float32(b.r.Min.X), float32(b.r.Min.Y), float32(b.r.Dx()), float32(b.r.Dy()), 1, color.RGBA{0xff, 0xff, 0xff, 0x80}, false)
+		drawText(screen, b.label, 15, float64(b.r.Min.X+b.r.Dx()/2), float64(b.r.Min.Y+7), alignCenter, color.RGBA{0xff, 0xff, 0xff, 0xff})
 	}
 }

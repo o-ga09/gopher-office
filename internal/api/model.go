@@ -10,6 +10,8 @@ type Player struct {
 	Gender      uint8     `gorm:"not null"`
 	IconHash    *string   `gorm:"size:64"`
 	CreatedAt   time.Time `gorm:"precision:3;not null"`
+	// TokenVersion は playerToken の失効用。作成時にだけ書き込む（更新は ChangePassword だけが SQL で行う）
+	TokenVersion uint32 `gorm:"<-:create;not null"`
 }
 
 // PlayerIcon はアイコン画像（再エンコード後の PNG）。Hash は Data の SHA-256 で、Player.IconHash が指す。

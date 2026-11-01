@@ -26,6 +26,12 @@ const (
 // 実際の API サーバ（と MySQL）に対して、クライアントを通す。
 func startAPI(t *testing.T) *apiclient.Client {
 	t.Helper()
+	return apiclient.New(startServer(t) + "/") // 末尾の / は取り除かれる
+}
+
+// startServer は API サーバを起動して、そのベース URL を返す。
+func startServer(t *testing.T) string {
+	t.Helper()
 	conn := testutil.OpenMySQL(t)
 	if _, err := migrate.Up(context.Background(), conn); err != nil {
 		t.Fatal(err)
@@ -49,7 +55,7 @@ func startAPI(t *testing.T) *apiclient.Client {
 	}
 	ts := httptest.NewServer(e)
 	t.Cleanup(ts.Close)
-	return apiclient.New(ts.URL + "/") // 末尾の / は取り除かれる
+	return ts.URL
 }
 
 func TestClientAgainstTheRealServer(t *testing.T) {

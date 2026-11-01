@@ -128,6 +128,9 @@ func main() {
 	if *static != "" {
 		mux.Handle("/", http.FileServer(http.Dir(*static)))
 		// 招待 URL（/w/{コード}）でも、同じ HTML を返す
+		mux.HandleFunc("/home", func(w http.ResponseWriter, r *http.Request) {
+			http.ServeFile(w, r, filepath.Join(*static, "index.html"))
+		})
 		mux.HandleFunc("/w/", func(w http.ResponseWriter, r *http.Request) {
 			http.ServeFile(w, r, filepath.Join(*static, "index.html"))
 		})

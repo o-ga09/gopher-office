@@ -40,6 +40,8 @@ type Player struct {
 	DisplayName string  `json:"display_name"`
 	Gender      uint8   `json:"gender"`
 	IconHash    *string `json:"icon_hash"`
+	// Account は永続アカウントの情報。ゲストなら nil（GET /v1/me と、ログイン・昇格のレスポンスで入る）。
+	Account *Account `json:"-"`
 }
 
 // JoinResult は入室の結果。
@@ -115,9 +117,11 @@ func (c *Client) CreateGuest(ctx context.Context, displayName string, gender uin
 // Me は自分のプロフィールを返す。
 func (c *Client) Me(ctx context.Context) (Player, error) {
 	var out struct {
-		Player Player `json:"player"`
+		Player  Player   `json:"player"`
+		Account *Account `json:"account"`
 	}
 	err := c.do(ctx, http.MethodGet, "/v1/me", nil, &out)
+	out.Player.Account = out.Account
 	return out.Player, err
 }
 

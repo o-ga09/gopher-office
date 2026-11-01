@@ -26,6 +26,7 @@ func (e *apiError) StatusCode() int { return e.status }
 
 var (
 	errUnauthorized = newAPIError(http.StatusUnauthorized, "unauthorized", "authentication is required")
+	errForbidden    = newAPIError(http.StatusForbidden, "forbidden", "you do not have permission to do this")
 	errNotFound     = newAPIError(http.StatusNotFound, "not_found", "not found")
 )
 

@@ -18,6 +18,8 @@ import (
 
 	"github.com/o-ga09/gopher-office/internal/api"
 	"github.com/o-ga09/gopher-office/internal/auth"
+	"github.com/o-ga09/gopher-office/internal/blob"
+	"github.com/o-ga09/gopher-office/internal/blob/s3blob"
 	"github.com/o-ga09/gopher-office/internal/k8s"
 )
 
@@ -30,9 +32,12 @@ func main() {
 		agonesFleet   = flag.String("agones-fleet", "office", "割り当て対象の Fleet の名前（-agones のとき）")
 		publicWSURL   = flag.String("public-ws-url", "", "クライアントが接続する、ゲートウェイの公開 WebSocket URL（例: wss://office.o-ga09.com/room。-agones のとき必須）")
 		maxWorkspaces = flag.Int("max-workspaces", 5, "1 人が作れるワークスペースの数")
+		maxRooms      = flag.Int("max-rooms", 5, "1 つのワークスペースに作れるルームの数")
 		guestPerMin   = flag.Int("guest-per-minute", 20, "IP ごとに、ゲストを作れる回数（分あたり）。負荷試験では上げる")
 		actionPerMin  = flag.Int("action-per-minute", 60, "プレイヤーごとに、ワークスペースの作成・入室ができる回数（分あたり）")
 		trustCF       = flag.Bool("trust-cloudflare-ip", false, "クライアントの IP を CF-Connecting-IP から取る（API に Cloudflare を通らず届かない場合だけ）")
+		iconStore     = flag.String("icon-store", "none", "アイコン画像の置き場: none（DB のみ）| dir（ローカル。開発用）| s3（S3 互換。S3_ENDPOINT / S3_BUCKET / S3_REGION / AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY）")
+		iconDir       = flag.String("icon-dir", "./icons-data", "-icon-store=dir のときのディレクトリ")
 		corsOrigins   = flag.String("cors-origin", "", "別のオリジンのブラウザから呼ぶことを許可するオリジン（カンマ区切り。開発用。本番は同一オリジンなので空）")
 	)
 	flag.Parse()
@@ -50,6 +55,21 @@ func main() {
 		log.Fatal(err) // DSN（パスワードを含む）は出力しない
 	}
 	defer func() { _ = conn.Close() }()
+
+	var blobs blob.Store
+	switch *iconStore {
+	case "none":
+	case "dir":
+		if blobs, err = blob.NewDir(*iconDir); err != nil {
+			log.Fatal(err)
+		}
+	case "s3":
+		if blobs, err = s3blob.New(s3blob.ConfigFromEnv(os.Getenv)); err != nil {
+			log.Fatal(err)
+		}
+	default:
+		log.Fatalf("-icon-store must be none, dir, or s3, got %q", *iconStore)
+	}
 
 	var origins []string
 	for _, o := range strings.Split(*corsOrigins, ",") {
@@ -80,10 +100,13 @@ func main() {
 
 	e, err := api.NewServer(api.Config{
 		Store:                  api.NewGormStore(db),
+		Accounts:               api.NewGormStore(db),
 		Signer:                 signer,
 		Allocator:              allocator,
 		Logger:                 logger,
+		Blobs:                  blobs,
 		MaxWorkspacesPerPlayer: *maxWorkspaces,
+		MaxRoomsPerWorkspace:   *maxRooms,
 		GuestPerMinute:         *guestPerMin,
 		ActionPerMinute:        *actionPerMin,
 		TrustCloudflareIP:      *trustCF,

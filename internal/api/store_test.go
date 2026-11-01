@@ -238,7 +238,7 @@ func TestGormStoreIcons(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, _, err := s.GetIcon(ctx, a.ID); !errors.Is(err, ErrNotFound) {
+	if _, err := s.GetIconHash(ctx, a.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("no icon yet: err = %v", err)
 	}
 
@@ -253,15 +253,90 @@ func TestGormStoreIcons(t *testing.T) {
 		t.Fatalf("the same icon for another player: %v", err)
 	}
 	for _, id := range []string{a.ID, b.ID} {
-		h, d, err := s.GetIcon(ctx, id)
-		if err != nil || h != hash || !bytes.Equal(d, data) {
-			t.Fatalf("GetIcon(%s) = %q %q err=%v", id, h, d, err)
+		h, err := s.GetIconHash(ctx, id)
+		if err != nil || h != hash {
+			t.Fatalf("GetIconHash(%s) = %q err=%v", id, h, err)
 		}
+	}
+	if d, err := s.LegacyIconData(ctx, hash); err != nil || !bytes.Equal(d, data) {
+		t.Fatalf("LegacyIconData = %q err=%v", d, err)
+	}
+	if _, err := s.LegacyIconData(ctx, strings.Repeat("cd", 32)); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown hash: err = %v", err)
+	}
+	if l, err := s.ListIcons(ctx, "", 100); err != nil || len(l) != 1 || l[0].Hash != hash {
+		t.Fatalf("ListIcons = %v err=%v", l, err)
+	}
+	if l, _ := s.ListIcons(ctx, hash, 100); len(l) != 0 {
+		t.Fatalf("ListIcons after the last: %v", l)
 	}
 	if p, _ := s.GetPlayer(ctx, a.ID); p.IconHash == nil || *p.IconHash != hash {
 		t.Fatalf("players.icon_hash must be persisted: %+v", p)
 	}
 	if _, err := s.SetIcon(ctx, ulid.Make().String(), hash, data); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing player: err = %v", err)
+	}
+}
+
+func TestGormStoreAccounts(t *testing.T) {
+	s := newGormStore(t)
+	ctx := context.Background()
+	mk := func(name string) *Player {
+		p := newPlayer(name)
+		if err := s.CreatePlayer(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	cred := func(p *Player, email string) *Credential {
+		now := time.Now().UTC().Truncate(time.Millisecond)
+		return &Credential{PlayerID: p.ID, Email: email, PasswordHash: "$argon2id$hash1", CreatedAt: now, UpdatedAt: now} //nolint:gosec // テスト用ダミー
+	}
+	a, b := mk("a"), mk("b")
+
+	if err := s.CreateCredential(ctx, cred(a, "a@example.com")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateCredential(ctx, cred(b, "a@example.com")); !errors.Is(err, ErrDuplicate) {
+		t.Fatalf("duplicate email: err = %v", err)
+	}
+	if err := s.CreateCredential(ctx, cred(a, "other@example.com")); !errors.Is(err, ErrDuplicate) {
+		t.Fatalf("duplicate player: err = %v", err)
+	}
+	// 保存前に小文字化する前提で、DB の照合は大文字小文字を区別する
+	if err := s.CreateCredential(ctx, cred(b, "A@example.com")); err != nil {
+		t.Fatalf("emails differing only in case are distinct rows (normalization is the caller's job): %v", err)
+	}
+	if got, err := s.GetCredentialByEmail(ctx, "a@example.com"); err != nil || got.PlayerID != a.ID {
+		t.Fatalf("lookup: %+v err=%v", got, err)
+	}
+	if _, err := s.GetCredentialByEmail(ctx, "A@EXAMPLE.COM"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("lookup must be case-sensitive: err = %v", err)
+	}
+	if _, err := s.GetCredential(ctx, ulid.Make().String()); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing credential: err = %v", err)
+	}
+
+	ver, err := s.ChangePassword(ctx, a.ID, "$argon2id$hash2")
+	if err != nil || ver != 1 {
+		t.Fatalf("ChangePassword = %d, %v", ver, err)
+	}
+	if c, _ := s.GetCredential(ctx, a.ID); c.PasswordHash != "$argon2id$hash2" {
+		t.Fatalf("hash not updated: %q", c.PasswordHash)
+	}
+	if ver, err = s.ChangePassword(ctx, a.ID, "$argon2id$hash3"); err != nil || ver != 2 {
+		t.Fatalf("second ChangePassword = %d, %v", ver, err)
+	}
+	// 他のカラムの更新で token_version が巻き戻らない
+	name := "renamed"
+	upd, err := s.UpdatePlayer(ctx, a.ID, PlayerUpdate{DisplayName: &name})
+	if err != nil || upd.TokenVersion != 2 {
+		t.Fatalf("UpdatePlayer must keep token_version: %+v err=%v", upd, err)
+	}
+	if got, _ := s.GetPlayer(ctx, a.ID); got.TokenVersion != 2 {
+		t.Fatalf("token_version = %d, want 2", got.TokenVersion)
+	}
+	if _, err := s.ChangePassword(ctx, ulid.Make().String(), "x"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing player: err = %v", err)
 	}
 }

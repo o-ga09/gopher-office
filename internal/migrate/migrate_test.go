@@ -139,3 +139,32 @@ func TestSchemaConstraints(t *testing.T) {
 		t.Fatalf("map_id default = %q (%v)", mapID, err)
 	}
 }
+
+// 途中で失敗して記録が残らなかったマイグレーションを、そのまま再実行できる。
+func TestMigrationsAreRerunnable(t *testing.T) {
+	db := testutil.OpenMySQL(t)
+	ctx := context.Background()
+	if _, err := Up(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO players (id, display_name, gender, created_at) VALUES ('P1', 'p', 0, NOW(3))"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO workspaces (id, owner_id, name, invite_code, created_at) VALUES ('W1', 'P1', 'w', 'aBcDeFgHiJkL', NOW(3))"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("DELETE FROM schema_migrations WHERE version >= '0003'"); err != nil {
+		t.Fatal(err)
+	}
+	applied, err := Up(ctx, db)
+	if err != nil {
+		t.Fatalf("re-running 0003 and later must succeed: %v", err)
+	}
+	if len(applied) < 3 {
+		t.Fatalf("applied = %v", applied)
+	}
+	var n int
+	if err := db.QueryRow("SELECT COUNT(*) FROM workspace_members WHERE workspace_id = 'W1'").Scan(&n); err != nil || n != 1 {
+		t.Fatalf("members = %d err=%v", n, err)
+	}
+}

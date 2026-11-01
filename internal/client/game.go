@@ -41,6 +41,17 @@ type Config struct {
 
 	// Voice は近くの人との音声通話（WebRTC）の実装。ブラウザ版だけが実装する（nil なら通話の機能は出ない）。
 	Voice voice.Engine
+
+	// Navigator はブラウザの URL を書き換える。デスクトップ版は nil（URL の書き換えは行わない）。
+	Navigator Navigator
+	// Home は、招待コードなしで開いた（ホーム画面から始める）ことを示す。
+	Home bool
+}
+
+// Navigator は URL の書き換え（履歴の更新）を行う。
+type Navigator interface {
+	// Push は、ページを再読み込みせずに URL のパス（例: /w/abc）に書き換える。
+	Push(path string)
 }
 
 // IconPicker は、利用者に画像ファイルを選ばせる。
@@ -63,20 +74,24 @@ const (
 	sceneConnecting              // サーバに接続中
 	sceneOffice                  // オフィス
 	sceneError                   // 接続失敗・切断
+	sceneLobby                   // ワークスペース一覧（My workspaces）
+	sceneAccount                 // サインイン
 )
 
 // framesPerTick は描画フレーム（60Hz）あたりのシミュレーション tick（20Hz）の比。
 const framesPerTick = 60 / sim.TickRate
 
 type dialResult struct {
-	c   *netcode.Client
-	err error
+	c      *netcode.Client
+	err    error
+	roomID string // 入ったルームの ID
 }
 
 // Game は ebiten.Game の実装。
 type Game struct {
-	cfg   Config
-	scene scene
+	cfg        Config
+	scene      scene
+	inviteCode string // 入室先の招待コード。初期値は cfg.InviteCode
 
 	sprites [3]*ebiten.Image
 
@@ -114,6 +129,14 @@ type Game struct {
 	pickErr     string
 	fieldRect   image.Rectangle
 	iconBtnRect image.Rectangle
+
+	workspacesBtnRect image.Rectangle // 「My workspaces」ボタン（Home のとき）
+	signInBtnRect     image.Rectangle // 「Sign in」ボタン（Home のとき）
+
+	lobby lobbyUI // ワークスペース一覧
+	rooms roomsUI // ルームの一覧・選択
+
+	acct *accountUI // サインイン画面の状態（開いたときに作る）
 }
 
 type drawable struct {
@@ -124,7 +147,7 @@ type drawable struct {
 // NewGame は選択画面から始まる Game を作る。
 func NewGame(cfg Config) *Game {
 	g := &Game{
-		cfg: cfg, m: sim.OfficeMap(), hoverCard: -1, nameTags: make(map[nameTagKey]*ebiten.Image),
+		cfg: cfg, inviteCode: cfg.InviteCode, m: sim.OfficeMap(), hoverCard: -1, nameTags: make(map[nameTagKey]*ebiten.Image),
 		icons:     newIconCache(cfg.APIBase),
 		nameField: textField{max: profile.MaxNameRunes},
 		pickCh:    make(chan pickResult, 1),
@@ -146,7 +169,7 @@ func NewGame(cfg Config) *Game {
 	return g
 }
 
-func (g *Game) online() bool { return g.cfg.ServerURL != "" || g.cfg.InviteCode != "" }
+func (g *Game) online() bool { return g.cfg.ServerURL != "" || g.inviteCode != "" }
 
 func (g *Game) Layout(_, _ int) (int, int) { return screenW, screenH }
 
@@ -163,6 +186,10 @@ func (g *Game) Update() error {
 		if _, ok := justClicked(); ok || inpututil.IsKeyJustPressed(ebiten.KeyEnter) {
 			g.leave()
 		}
+	case sceneLobby:
+		g.updateLobby()
+	case sceneAccount:
+		g.updateAccount()
 	}
 	return nil
 }
@@ -177,6 +204,10 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		g.drawOffice(screen)
 	case sceneError:
 		g.drawMessage(screen, g.errTitle, g.err+"\n\nClick to go back")
+	case sceneLobby:
+		g.drawLobby(screen)
+	case sceneAccount:
+		g.drawAccount(screen)
 	}
 	drawCredit(screen) // 常に最前面・画面中央
 }
@@ -185,6 +216,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 
 func (g *Game) updateSelect() {
 	g.pollProfileAsync()
+	g.updateRoomPick()
 	g.nameField.update()
 
 	g.hoverCard = -1
@@ -211,6 +243,7 @@ func (g *Game) updateSelect() {
 		if g.canPickIcon() && click.In(g.iconBtnRect) {
 			g.pickIcon()
 		}
+		g.clickProfileButtons(click)
 		for i, r := range g.cardRects {
 			if click.In(r) {
 				choice = i
@@ -245,20 +278,20 @@ func (g *Game) enter(gender sim.Gender) {
 	g.scene = sceneConnecting
 	dial := make(chan dialResult, 1)
 	g.dial = dial
-	cfg := g.cfg
+	cfg, inviteCode, pickRoom := g.cfg, g.inviteCode, g.rooms.pickID
 	go func() { // 接続の待ち時間でゲームループを止めない
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 
 		url, token := cfg.ServerURL, cfg.RoomToken
-		iconHash := ""
-		if cfg.InviteCode != "" {
-			j, p, err := joinViaAPI(ctx, cfg, name, gender, iconPNG)
+		iconHash, roomID := "", ""
+		if inviteCode != "" {
+			j, p, err := joinViaAPI(ctx, cfg, inviteCode, pickRoom, name, gender, iconPNG)
 			if err != nil {
 				dial <- dialResult{err: err}
 				return
 			}
-			url, token = j.DialURL(), j.RoomToken
+			url, token, roomID = j.DialURL(), j.RoomToken, j.Room.ID
 			if p.IconHash != nil {
 				iconHash = *p.IconHash
 			}
@@ -267,7 +300,7 @@ func (g *Game) enter(gender sim.Gender) {
 			RoomToken: token,
 			Profile:   &officev1.Profile{DisplayName: name, Gender: wire.GenderToProto(gender), IconHash: iconHash},
 		})
-		dial <- dialResult{c: c, err: err}
+		dial <- dialResult{c: c, err: err, roomID: roomID}
 	}()
 }
 
@@ -279,6 +312,7 @@ func (g *Game) updateConnecting() {
 			return
 		}
 		g.conn = r.c
+		g.rooms.current = r.roomID
 		if g.cfg.Voice != nil {
 			g.voice = voice.New(g.cfg.Voice, signalSender(r.c))
 		}
@@ -335,6 +369,7 @@ func (g *Game) drawSelect(screen *ebiten.Image) {
 	}
 
 	g.drawProfilePanel(screen)
+	g.drawRoomPick(screen)
 
 	hint := "Click a card or press 1 / 2 / 3"
 	if !g.online() {
@@ -361,6 +396,9 @@ func (g *Game) updateOffice() {
 
 	if !g.w.Ready {
 		return // Welcome を待っている
+	}
+	if g.updateRooms() { // ルーム一覧が開いている間は、移動などの入力を受けない
+		return
 	}
 	g.updateVoiceKeys()
 
@@ -536,6 +574,7 @@ func (g *Game) drawOffice(screen *ebiten.Image) {
 	hud += g.voiceHUD()
 	g.drawVoiceRange(screen, self, alpha)
 	drawText(screen, hud, 14, 12, 4, alignLeft, color.RGBA{0xff, 0xff, 0xff, 0xc0})
+	g.drawRooms(screen)
 }
 
 // justClicked はマウスの左クリックまたはタッチが始まった位置を返す。

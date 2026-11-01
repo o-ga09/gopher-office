@@ -188,3 +188,21 @@ func TestRoomVerifier(t *testing.T) {
 		t.Fatal("a short secret must be rejected")
 	}
 }
+
+func TestPlayerTokenVersion(t *testing.T) {
+	s, err := NewSigner(strings.Repeat("p", 32), strings.Repeat("r", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, _ := s.IssuePlayerTokenV("p1", 7)
+	if c, err := s.ParsePlayerTokenClaims(tok); err != nil || c.PlayerID != "p1" || c.Version != 7 {
+		t.Fatalf("claims = %+v, %v", c, err)
+	}
+	if id, err := s.ParsePlayerToken(tok); err != nil || id != "p1" {
+		t.Fatalf("ParsePlayerToken = %q, %v", id, err)
+	}
+	old, _ := s.IssuePlayerToken("p1")
+	if c, err := s.ParsePlayerTokenClaims(old); err != nil || c.Version != 0 {
+		t.Fatalf("legacy claims = %+v, %v", c, err)
+	}
+}
