@@ -3,8 +3,10 @@ module github.com/o-ga09/gopher-office
 go 1.27.0
 
 require (
+	github.com/coder/websocket v1.8.15
 	github.com/hajimehoshi/ebiten/v2 v2.10.5
 	golang.org/x/image v0.47.0
+	google.golang.org/protobuf v1.36.12
 )
 
 require (

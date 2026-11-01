@@ -1,0 +1,133 @@
+syntax = "proto3";
+
+// クライアント（ブラウザ WASM / bot）と GameServer の間で WebSocket のバイナリフレームとして送るメッセージ。
+// 設計: docs/design.md §6
+package office.v1;
+
+option go_package = "github.com/o-ga09/gopher-office/gen/office/v1;officev1";
+
+// 性別。値は DB の players.gender と一致させる。
+enum Gender {
+  GENDER_MALE = 0;   // 男性（青 Gopher）
+  GENDER_FEMALE = 1; // 女性（赤 Gopher）
+  GENDER_OTHER = 2;  // その他（黄 Gopher）
+}
+
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  ERROR_CODE_FULL = 1;             // ルームが満員
+  ERROR_CODE_BAD_TOKEN = 2;        // roomToken が不正・期限切れ
+  ERROR_CODE_BAD_REQUEST = 3;      // 不正なメッセージ
+  ERROR_CODE_RATE_LIMITED = 4;     // 送信が多すぎる
+  ERROR_CODE_VERSION_MISMATCH = 5; // クライアントのバージョンが古い
+}
+
+message Profile {
+  string display_name = 1; // 最大 32 文字（rune）。サーバ側で正規化する
+  Gender gender = 2;
+  string icon_hash = 3; // アイコン画像の SHA-256（空ならシルエット）。画像本体は API から取得する
+}
+
+// 移動状態。クライアントは同じ sim で再生するため、位置と「意図」だけを持つ。
+message MoveState {
+  string player_id = 1;
+  int32 x = 2; // 位置（サブユニット。1 タイル = 256）
+  int32 y = 3;
+  int32 dir_x = 4; // 方向入力（-1, 0, 1）。0,0 かつ has_target=false なら停止中
+  int32 dir_y = 5;
+  bool has_target = 6; // クリック移動中か
+  int32 target_x = 7;  // 目的地（タイル座標）
+  int32 target_y = 8;
+}
+
+message Player {
+  string id = 1;
+  Profile profile = 2;
+  MoveState state = 3;
+}
+
+// ---- クライアント → サーバ ----
+
+message Hello {
+  string room_token = 1;
+  string client_version = 2;
+  Profile profile = 3;
+}
+
+// クリック移動。目的地のタイル座標。
+message MoveTo {
+  int32 x = 1;
+  int32 y = 2;
+}
+
+// 方向入力。入力が変わったときだけ送る（押しっぱなしで毎フレーム送らない）。
+message MoveDir {
+  int32 dx = 1;
+  int32 dy = 2;
+}
+
+message Ping {
+  int64 client_time_ms = 1;
+}
+
+message ClientMessage {
+  oneof body {
+    Hello hello = 1;
+    MoveTo move_to = 2;
+    MoveDir move_dir = 3;
+    Ping ping = 4;
+  }
+}
+
+// ---- サーバ → クライアント ----
+
+message Welcome {
+  string player_id = 1; // 自分の ID
+  uint32 tick = 2;      // サーバの現在 tick
+  uint32 tick_rate = 3; // Hz
+  string map_id = 4;
+  uint32 max_players = 5;
+  repeated Player players = 6; // 自分を含む、現在の全員
+}
+
+message PlayerJoined {
+  Player player = 1;
+}
+
+message PlayerLeft {
+  string player_id = 1;
+}
+
+// 移動の意図が変わった人だけを、tick ごとにまとめて送る。
+message Moved {
+  uint32 tick = 1;
+  repeated MoveState states = 2;
+}
+
+// ドリフト補正用に、全員の状態を定期的に送る（1Hz）。
+message Sync {
+  uint32 tick = 1;
+  repeated MoveState states = 2;
+}
+
+message Pong {
+  int64 client_time_ms = 1; // Ping のエコー
+  uint32 server_tick = 2;
+}
+
+message Error {
+  ErrorCode code = 1;
+  string message = 2;
+}
+
+message ServerMessage {
+  oneof body {
+    Welcome welcome = 1;
+    PlayerJoined player_joined = 2;
+    PlayerLeft player_left = 3;
+    Moved moved = 4;
+    Sync sync = 5;
+    Pong pong = 6;
+    Error error = 7;
+  }
+}
