@@ -20,6 +20,7 @@ import (
 	"github.com/o-ga09/gopher-office/internal/netcode"
 	"github.com/o-ga09/gopher-office/internal/profile"
 	"github.com/o-ga09/gopher-office/internal/sim"
+	"github.com/o-ga09/gopher-office/internal/voice"
 	"github.com/o-ga09/gopher-office/internal/wire"
 )
 
@@ -37,6 +38,9 @@ type Config struct {
 
 	// IconPicker はアイコン画像を選ばせる。ブラウザ版だけが実装する（デスクトップ版は nil で、アイコンは設定できない）。
 	IconPicker IconPicker
+
+	// Voice は近くの人との音声通話（WebRTC）の実装。ブラウザ版だけが実装する（nil なら通話の機能は出ない）。
+	Voice voice.Engine
 }
 
 // IconPicker は、利用者に画像ファイルを選ばせる。
@@ -80,7 +84,9 @@ type Game struct {
 	bg *ebiten.Image
 
 	w        *netcode.World
-	conn     *netcode.Client // オフラインのときは nil
+	conn     *netcode.Client   // オフラインのときは nil
+	voice    *voice.Controller // 通話。使えない（オフライン・デスクトップ）ときは nil
+	voiceNow int               // 通話の更新までの tick（voiceEvery ごとに近くの人を更新する）
 	dial     chan dialResult
 	err      string // 接続の失敗・切断の理由（利用者向けの文言）
 	errTitle string
@@ -273,12 +279,16 @@ func (g *Game) updateConnecting() {
 			return
 		}
 		g.conn = r.c
+		if g.cfg.Voice != nil {
+			g.voice = voice.New(g.cfg.Voice, signalSender(r.c))
+		}
 		g.scene = sceneOffice
 	default:
 	}
 }
 
 func (g *Game) fail(msg string) {
+	g.closeVoice()
 	if g.conn != nil {
 		g.conn.Close()
 		g.conn = nil
@@ -293,6 +303,7 @@ func (g *Game) fail(msg string) {
 
 // leave は接続を閉じて選択画面に戻る。
 func (g *Game) leave() {
+	g.closeVoice()
 	if g.conn != nil {
 		g.conn.Close()
 		g.conn = nil
@@ -351,6 +362,7 @@ func (g *Game) updateOffice() {
 	if !g.w.Ready {
 		return // Welcome を待っている
 	}
+	g.updateVoiceKeys()
 
 	// 入力は毎フレーム読み取り、tick の境界で反映する
 	if click, ok := justClicked(); ok {
@@ -381,6 +393,9 @@ func (g *Game) drainServer() bool {
 	for {
 		select {
 		case m, ok := <-g.conn.Recv():
+			if ok && g.handleSignal(m) {
+				continue
+			}
 			if !ok {
 				reason := "The connection was closed."
 				if err := g.conn.Err(); err != nil && !errors.Is(err, netcode.ErrClosed) {
@@ -459,6 +474,7 @@ func (g *Game) step() {
 	}
 
 	g.w.Step()
+	g.updateVoice()
 }
 
 func (g *Game) send(m *officev1.ClientMessage) {
@@ -517,6 +533,8 @@ func (g *Game) drawOffice(screen *ebiten.Image) {
 	if g.online() {
 		hud = fmt.Sprintf("Online %d/%d   %d ms   ", len(g.w.Players), g.w.MaxPlayers, g.conn.RTT().Milliseconds()) + hud
 	}
+	hud += g.voiceHUD()
+	g.drawVoiceRange(screen, self, alpha)
 	drawText(screen, hud, 14, 12, 4, alignLeft, color.RGBA{0xff, 0xff, 0xff, 0xc0})
 }
 

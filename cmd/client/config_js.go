@@ -39,6 +39,7 @@ func loadConfig() client.Config {
 		}
 		cfg.Store = localStorageTokens{}
 		cfg.IconPicker = filePicker{}
+		cfg.Voice = newWebVoice()
 		return cfg
 	}
 
@@ -48,6 +49,9 @@ func loadConfig() client.Config {
 			scheme = "wss"
 		}
 		cfg.ServerURL = scheme + "://" + u.Host + "/room"
+	}
+	if cfg.ServerURL != "" {
+		cfg.Voice = newWebVoice()
 	}
 	return cfg
 }

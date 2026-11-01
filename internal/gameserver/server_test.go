@@ -262,3 +262,44 @@ func TestHelloWithAnotherProtocolVersionIsRejected(t *testing.T) {
 		}
 	}
 }
+
+func TestSignalIsRelayedToTheTargetOnly(t *testing.T) {
+	url := startServer(t, Config{MaxPlayers: 10})
+	join := func(name string) (*testClient, uint32) {
+		c := dial(t, url)
+		c.hello("", name, officev1.Gender_GENDER_OTHER)
+		return c, c.recvUntil(isWelcome).GetWelcome().GetSelfPid()
+	}
+	a, pa := join("a")
+	b, pb := join("b")
+	c, _ := join("c")
+
+	a.send(&officev1.ClientMessage{Body: &officev1.ClientMessage_Signal{Signal: &officev1.Signal{Pid: pb, Payload: []byte(`{"type":"offer"}`)}}})
+
+	got := b.recvUntil(func(m *officev1.ServerMessage) bool { return m.GetSignal() != nil }).GetSignal()
+	if got.GetPid() != pa || string(got.GetPayload()) != `{"type":"offer"}` {
+		t.Fatalf("signal = from %d %q, want from %d", got.GetPid(), got.GetPayload(), pa)
+	}
+	// 第三者には届かない。次に来る別のメッセージ（ここでは自分宛ての応答）まで Signal が出ないことを確認する
+	b.send(&officev1.ClientMessage{Body: &officev1.ClientMessage_Signal{Signal: &officev1.Signal{Pid: pa, Payload: []byte("x")}}})
+	a.recvUntil(func(m *officev1.ServerMessage) bool { return m.GetSignal() != nil })
+	c.send(&officev1.ClientMessage{Body: &officev1.ClientMessage_Ping{Ping: &officev1.Ping{ClientTimeMs: 1}}})
+	c.recvUntil(func(m *officev1.ServerMessage) bool {
+		if m.GetSignal() != nil {
+			t.Fatal("a third party received the signal")
+		}
+		return m.GetPong() != nil
+	})
+}
+
+func TestOversizedSignalIsRejected(t *testing.T) {
+	url := startServer(t, Config{MaxPlayers: 10})
+	a := dial(t, url)
+	a.hello("", "a", officev1.Gender_GENDER_OTHER)
+	a.recvUntil(isWelcome)
+	a.send(&officev1.ClientMessage{Body: &officev1.ClientMessage_Signal{Signal: &officev1.Signal{Pid: 99, Payload: make([]byte, maxSignalPayload+1)}}})
+	m := a.recvUntil(func(m *officev1.ServerMessage) bool { return m.GetError() != nil })
+	if m.GetError().GetCode() != officev1.ErrorCode_ERROR_CODE_BAD_REQUEST {
+		t.Fatalf("code = %v", m.GetError().GetCode())
+	}
+}
