@@ -192,6 +192,15 @@ sequenceDiagram
   end
 ```
 
+### 実装で確定した方針（P3）
+
+- **Agones SDK**: 公式の Go SDK（gRPC と大きな依存）は使わず、サイドカーの REST API（`localhost:9358`）を `internal/agones` で呼ぶ。`Ready` / `Health`（2 秒ごと）/ `Shutdown` / `watch/gameserver`（annotation の監視）だけ
+- **ルームの決まり方**: 割り当て時に API が付ける annotation `roomId` を GameServer が監視で読み、以後その roomId のトークンだけを通す。**割り当て前は、どのトークンも通さない**。無人タイマーも、割り当てられてから数える（待機中に止まらないように）
+- **割り当て**: `AgonesAllocator`。Redis には、ロック（`room:{id}:lock`、15 秒）とルーム→GameServer 名（`room:{id}`、1 時間）だけを置く。**生存の確認は、毎回 k8s API で GameServer を取って、`Allocated` かつ annotation が一致するかを見る**（設計時の「GameServer が Redis の TTL を延長する」方式にしないことで、GameServer が Redis を持たずに済む）。`GameServerAllocation` は k8s の集約 API に直接 POST する（allocator の gRPC サービスは使わない）。Ready が無ければ 503
+- **ゲートウェイ**: クライアントは `wss://…/room?token=<roomToken>` につなぐ（WebSocket はヘッダを付けられないため URL に載せる。有効 60 秒、ログには URL を出さない）。ゲートウェイは署名と期限を見て、トークンの `gs` から Pod の IP を k8s API で引き（10 秒キャッシュ）、WebSocket を種別のまま中継する。ルームの一致と満員の判定は GameServer が行う（`Hello` のトークンも GameServer で再検証する）
+- **client-go は使わない**: `internal/k8s` が ServiceAccount のトークンで REST を呼ぶ。権限は API が `gameserverallocations` の create と `gameservers` の get、ゲートウェイが `pods` の get だけ
+- **イメージ**: ルートの `Dockerfile` の `--target`（gameserver / gateway / api / web）。Go のクロスコンパイルで amd64 / arm64 を 1 回のビルドで作る。`main` への push で GHCR に push する（`.github/workflows/images.yml`）
+
 ### GameServer の状態遷移
 
 | 状態 | きっかけ |
