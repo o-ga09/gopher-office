@@ -3,6 +3,7 @@ package gameserver
 import (
 	"fmt"
 	"io"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -38,15 +39,20 @@ func (m *metrics) observeTick(d time.Duration, budget time.Duration) {
 // office_tick_max_seconds は「前回の読み出し以降」の最大で、読み出すたびにリセットされる。
 func (r *Room) WriteMetrics(w io.Writer) {
 	m := &r.m
-	fmt.Fprintf(w, "# TYPE office_players gauge\noffice_players %d\n", r.Players())
-	fmt.Fprintf(w, "# TYPE office_sent_bytes_total counter\noffice_sent_bytes_total %d\n", m.bytesSent.Load())
-	fmt.Fprintf(w, "# TYPE office_sent_messages_total counter\noffice_sent_messages_total %d\n", m.msgsSent.Load())
-	fmt.Fprintf(w, "# TYPE office_dropped_messages_total counter\noffice_dropped_messages_total %d\n", m.dropped.Load())
-	fmt.Fprintf(w, "# TYPE office_kicked_total counter\noffice_kicked_total %d\n", m.kicked.Load())
-	fmt.Fprintf(w, "# TYPE office_ticks_total counter\noffice_ticks_total %d\n", m.ticks.Load())
-	fmt.Fprintf(w, "# TYPE office_tick_seconds_total counter\noffice_tick_seconds_total %g\n", float64(m.tickNanos.Load())/1e9)
-	fmt.Fprintf(w, "# TYPE office_tick_overruns_total counter\noffice_tick_overruns_total %d\n", m.tickOverNs.Load())
-	fmt.Fprintf(w, "# TYPE office_tick_max_seconds gauge\noffice_tick_max_seconds %g\n", float64(m.tickMaxNs.Swap(0))/1e9)
+	var b strings.Builder // 組み立ててから 1 回で書く（途中で書き込みに失敗しても、中途半端な出力を重ねない）
+	metric := func(kind, name string, value any) {
+		fmt.Fprintf(&b, "# TYPE %s %s\n%s %v\n", name, kind, name, value) // strings.Builder への書き込みは失敗しない
+	}
+	metric("gauge", "office_players", r.Players())
+	metric("counter", "office_sent_bytes_total", m.bytesSent.Load())
+	metric("counter", "office_sent_messages_total", m.msgsSent.Load())
+	metric("counter", "office_dropped_messages_total", m.dropped.Load())
+	metric("counter", "office_kicked_total", m.kicked.Load())
+	metric("counter", "office_ticks_total", m.ticks.Load())
+	metric("counter", "office_tick_seconds_total", float64(m.tickNanos.Load())/1e9)
+	metric("counter", "office_tick_overruns_total", m.tickOverNs.Load())
+	metric("gauge", "office_tick_max_seconds", float64(m.tickMaxNs.Swap(0))/1e9)
+	_, _ = io.WriteString(w, b.String())
 }
 
 // Stats は計測値のスナップショット。
