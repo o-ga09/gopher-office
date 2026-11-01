@@ -35,8 +35,11 @@ type Config struct {
 	MaxPlayers  int
 	IdleTimeout time.Duration // 無人がこの時間続いたら OnIdle を呼ぶ。0 なら呼ばない
 	OnIdle      func()
-	Verifier    TokenVerifier
-	Logger      *slog.Logger
+	// DeferIdle を true にすると、Arm が呼ばれるまで無人の時間を数えない。
+	// Agones では、待機中（Ready）の GameServer を止めないよう、割り当てられてから数え始める。
+	DeferIdle bool
+	Verifier  TokenVerifier
+	Logger    *slog.Logger
 	// OriginPatterns は WebSocket で許可する Origin（host のパターン）。空なら同一オリジンのみ。
 	OriginPatterns []string
 }
@@ -99,6 +102,8 @@ type Room struct {
 	emptySince time.Time
 	idleFired  bool
 
+	armedAt atomic.Int64 // Arm を呼んだ時刻（UnixNano）。0 なら未了
+
 	serverTick atomic.Uint32
 	numPlayers atomic.Int32
 }
@@ -126,6 +131,9 @@ func NewRoom(cfg Config) *Room {
 		walkable: cfg.Map.WalkableTiles(),
 	}
 }
+
+// Arm は、無人の時間を数え始めてよいことを知らせる（Config.DeferIdle のとき）。何度呼んでもよい。
+func (r *Room) Arm() { r.armedAt.CompareAndSwap(0, time.Now().UnixNano()) }
 
 // Players は現在の人数を返す。
 func (r *Room) Players() int { return int(r.numPlayers.Load()) }
@@ -275,7 +283,15 @@ func (r *Room) step(now time.Time) {
 		}
 	}
 
-	if len(r.players) == 0 && r.cfg.IdleTimeout > 0 && !r.idleFired && now.Sub(r.emptySince) >= r.cfg.IdleTimeout {
+	since, counting := r.emptySince, true
+	if r.cfg.DeferIdle {
+		a := r.armedAt.Load()
+		counting = a != 0
+		if t := time.Unix(0, a); t.After(since) {
+			since = t // 割り当てられた時点から数える
+		}
+	}
+	if counting && len(r.players) == 0 && r.cfg.IdleTimeout > 0 && !r.idleFired && now.Sub(since) >= r.cfg.IdleTimeout {
 		r.idleFired = true
 		r.log.Info("room is idle", "idle_timeout", r.cfg.IdleTimeout)
 		if r.cfg.OnIdle != nil {

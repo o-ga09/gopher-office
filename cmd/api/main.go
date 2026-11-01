@@ -14,14 +14,21 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/redis/go-redis/v9"
+
 	"github.com/o-ga09/gopher-office/internal/api"
 	"github.com/o-ga09/gopher-office/internal/auth"
+	"github.com/o-ga09/gopher-office/internal/k8s"
 )
 
 func main() {
 	var (
 		addr          = flag.String("addr", ":8080", "listen address")
-		gameServerURL = flag.String("gameserver-url", "ws://localhost:7654/room", "クライアントが接続する GameServer の WebSocket URL（Agones を使うまでの固定の割り当て）")
+		gameServerURL = flag.String("gameserver-url", "ws://localhost:7654/room", "クライアントが接続する GameServer の WebSocket URL（-agones を使わないときの固定の割り当て）")
+		useAgones     = flag.Bool("agones", false, "Agones の GameServerAllocation でルームに GameServer を割り当てる（クラスタ内で動かす。REDIS_URL が必要）")
+		agonesNS      = flag.String("agones-namespace", "gopher-office", "GameServer の Namespace（-agones のとき）")
+		agonesFleet   = flag.String("agones-fleet", "office", "割り当て対象の Fleet の名前（-agones のとき）")
+		publicWSURL   = flag.String("public-ws-url", "", "クライアントが接続する、ゲートウェイの公開 WebSocket URL（例: wss://office.o-ga09.com/room。-agones のとき必須）")
 		maxWorkspaces = flag.Int("max-workspaces", 5, "1 人が作れるワークスペースの数")
 		guestPerMin   = flag.Int("guest-per-minute", 20, "IP ごとに、ゲストを作れる回数（分あたり）。負荷試験では上げる")
 		actionPerMin  = flag.Int("action-per-minute", 60, "プレイヤーごとに、ワークスペースの作成・入室ができる回数（分あたり）")
@@ -51,10 +58,30 @@ func main() {
 		}
 	}
 
+	var allocator api.RoomAllocator = api.StaticAllocator{URL: *gameServerURL}
+	if *useAgones {
+		if *publicWSURL == "" {
+			log.Fatal("-public-ws-url is required with -agones")
+		}
+		opts, err := redis.ParseURL(mustEnv("REDIS_URL"))
+		if err != nil {
+			log.Fatal("REDIS_URL is invalid") // 値（パスワードを含みうる）は出力しない
+		}
+		kube, err := k8s.InCluster()
+		if err != nil {
+			log.Fatal(err)
+		}
+		rc := redis.NewClient(opts)
+		defer func() { _ = rc.Close() }()
+		allocator = &api.AgonesAllocator{
+			Kube: kube, KV: api.NewRedisKV(rc), Namespace: *agonesNS, Fleet: *agonesFleet, PublicURL: *publicWSURL,
+		}
+	}
+
 	e, err := api.NewServer(api.Config{
 		Store:                  api.NewGormStore(db),
 		Signer:                 signer,
-		Allocator:              api.StaticAllocator{URL: *gameServerURL},
+		Allocator:              allocator,
 		Logger:                 logger,
 		MaxWorkspacesPerPlayer: *maxWorkspaces,
 		GuestPerMinute:         *guestPerMin,
