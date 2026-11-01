@@ -124,6 +124,7 @@ func main() {
 	h := s.Handler()
 	mux.Handle("/room", h)
 	mux.Handle("/healthz", h)
+	mux.Handle("/metrics", h) // クラスタ内の Prometheus 用。Ingress には出さない
 	if *static != "" {
 		mux.Handle("/", http.FileServer(http.Dir(*static)))
 		// 招待 URL（/w/{コード}）でも、同じ HTML を返す
@@ -141,6 +142,7 @@ func main() {
 	}
 
 	go s.Room().Run(ctx)
+	go logStats(ctx, logger, s.Room())
 	if sdk != nil {
 		go sdk.HealthLoop(ctx, logger)
 		go sdk.Watch(ctx, logger, func(st agones.State) {
@@ -170,4 +172,32 @@ func main() {
 		log.Fatal(err)
 	}
 	logger.Info("stopped")
+}
+
+// logStats は 10 秒ごとに、人数・送信帯域・tick の処理時間をログに出す（人がいる間だけ）。
+func logStats(ctx context.Context, logger *slog.Logger, room *gameserver.Room) {
+	const every = 10 * time.Second
+	t := time.NewTicker(every)
+	defer t.Stop()
+	prev := room.Stats()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		cur := room.Stats()
+		if cur.Players > 0 || cur.BytesSent != prev.BytesSent {
+			ticks := max(cur.Ticks-prev.Ticks, 1)
+			logger.Info("stats",
+				"players", cur.Players,
+				"sent_mbps", float64(cur.BytesSent-prev.BytesSent)*8/1e6/every.Seconds(),
+				"tick_avg_us", (cur.TickTime-prev.TickTime).Microseconds()/ticks,
+				"tick_overruns", cur.Overruns-prev.Overruns,
+				"dropped", cur.Dropped-prev.Dropped,
+				"kicked", cur.Kicked-prev.Kicked,
+			)
+		}
+		prev = cur
+	}
 }

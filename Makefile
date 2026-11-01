@@ -1,4 +1,4 @@
-.PHONY: run wasm serve dev gameserver bot proto test test-all dev-env db db-stop migrate api invite dev-invite
+.PHONY: loadtest run wasm serve dev gameserver bot proto test test-all dev-env db db-stop migrate api invite dev-invite
 
 # DB（ローカルの Docker）
 DB_CONTAINER ?= gopher-office-dev-mysql
@@ -20,6 +20,9 @@ dev: wasm ## ブラウザ版と GameServer（認証なし）を起動する。ht
 
 gameserver: ## ローカル用の GameServer だけを起動（認証なし）
 	go run ./cmd/gameserver -local
+
+loadtest: ## ローカルで bot を N 体つないで、帯域と tick 時間を測る（N=200 SECS=60）
+	scripts/loadtest.sh $(or $(N),200) $(or $(SECS),60)
 
 bot: ## bot を直接つなぐ（N=人数。既定 50）。招待コード経由は go run ./cmd/bot -api ... -invite ...
 	go run ./cmd/bot -n $(or $(N),50)

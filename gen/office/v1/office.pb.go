@@ -193,13 +193,16 @@ func (x *Profile) GetIconHash() string {
 }
 
 // 移動状態。クライアントは同じ sim で再生するため、位置と「意図」だけを持つ。
+//
+// 帯域のため、プレイヤーは文字列の ID ではなく、ルーム内の番号（pid）で指す。
+// 方向は負の値が多いので sint32（int32 の -1 は 10 バイトかかる）。
 type MoveState struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	PlayerId      string                 `protobuf:"bytes,1,opt,name=player_id,json=playerId,proto3" json:"player_id,omitempty"`
+	Pid           uint32                 `protobuf:"varint,9,opt,name=pid,proto3" json:"pid,omitempty"`
 	X             int32                  `protobuf:"varint,2,opt,name=x,proto3" json:"x,omitempty"` // 位置（サブユニット。1 タイル = 256）
 	Y             int32                  `protobuf:"varint,3,opt,name=y,proto3" json:"y,omitempty"`
-	DirX          int32                  `protobuf:"varint,4,opt,name=dir_x,json=dirX,proto3" json:"dir_x,omitempty"` // 方向入力（-1, 0, 1）。0,0 かつ has_target=false なら停止中
-	DirY          int32                  `protobuf:"varint,5,opt,name=dir_y,json=dirY,proto3" json:"dir_y,omitempty"`
+	DirX          int32                  `protobuf:"zigzag32,4,opt,name=dir_x,json=dirX,proto3" json:"dir_x,omitempty"` // 方向入力（-1, 0, 1）。0,0 かつ has_target=false なら停止中
+	DirY          int32                  `protobuf:"zigzag32,5,opt,name=dir_y,json=dirY,proto3" json:"dir_y,omitempty"`
 	HasTarget     bool                   `protobuf:"varint,6,opt,name=has_target,json=hasTarget,proto3" json:"has_target,omitempty"` // クリック移動中か
 	TargetX       int32                  `protobuf:"varint,7,opt,name=target_x,json=targetX,proto3" json:"target_x,omitempty"`       // 目的地（タイル座標）
 	TargetY       int32                  `protobuf:"varint,8,opt,name=target_y,json=targetY,proto3" json:"target_y,omitempty"`
@@ -237,11 +240,11 @@ func (*MoveState) Descriptor() ([]byte, []int) {
 	return file_office_v1_office_proto_rawDescGZIP(), []int{1}
 }
 
-func (x *MoveState) GetPlayerId() string {
+func (x *MoveState) GetPid() uint32 {
 	if x != nil {
-		return x.PlayerId
+		return x.Pid
 	}
-	return ""
+	return 0
 }
 
 func (x *MoveState) GetX() int32 {
@@ -298,6 +301,7 @@ type Player struct {
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Profile       *Profile               `protobuf:"bytes,2,opt,name=profile,proto3" json:"profile,omitempty"`
 	State         *MoveState             `protobuf:"bytes,3,opt,name=state,proto3" json:"state,omitempty"`
+	Pid           uint32                 `protobuf:"varint,4,opt,name=pid,proto3" json:"pid,omitempty"` // ルーム内の番号。以後の Moved / Sync / PlayerLeft はこの番号で指す
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -351,6 +355,13 @@ func (x *Player) GetState() *MoveState {
 		return x.State
 	}
 	return nil
+}
+
+func (x *Player) GetPid() uint32 {
+	if x != nil {
+		return x.Pid
+	}
+	return 0
 }
 
 type Hello struct {
@@ -684,7 +695,8 @@ type Welcome struct {
 	TickRate      uint32                 `protobuf:"varint,3,opt,name=tick_rate,json=tickRate,proto3" json:"tick_rate,omitempty"` // Hz
 	MapId         string                 `protobuf:"bytes,4,opt,name=map_id,json=mapId,proto3" json:"map_id,omitempty"`
 	MaxPlayers    uint32                 `protobuf:"varint,5,opt,name=max_players,json=maxPlayers,proto3" json:"max_players,omitempty"`
-	Players       []*Player              `protobuf:"bytes,6,rep,name=players,proto3" json:"players,omitempty"` // 自分を含む、現在の全員
+	Players       []*Player              `protobuf:"bytes,6,rep,name=players,proto3" json:"players,omitempty"`                 // 自分を含む、現在の全員
+	SelfPid       uint32                 `protobuf:"varint,7,opt,name=self_pid,json=selfPid,proto3" json:"self_pid,omitempty"` // 自分の pid
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -761,6 +773,13 @@ func (x *Welcome) GetPlayers() []*Player {
 	return nil
 }
 
+func (x *Welcome) GetSelfPid() uint32 {
+	if x != nil {
+		return x.SelfPid
+	}
+	return 0
+}
+
 type PlayerJoined struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Player        *Player                `protobuf:"bytes,1,opt,name=player,proto3" json:"player,omitempty"`
@@ -807,7 +826,7 @@ func (x *PlayerJoined) GetPlayer() *Player {
 
 type PlayerLeft struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	PlayerId      string                 `protobuf:"bytes,1,opt,name=player_id,json=playerId,proto3" json:"player_id,omitempty"`
+	Pid           uint32                 `protobuf:"varint,2,opt,name=pid,proto3" json:"pid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -842,11 +861,11 @@ func (*PlayerLeft) Descriptor() ([]byte, []int) {
 	return file_office_v1_office_proto_rawDescGZIP(), []int{10}
 }
 
-func (x *PlayerLeft) GetPlayerId() string {
+func (x *PlayerLeft) GetPid() uint32 {
 	if x != nil {
-		return x.PlayerId
+		return x.Pid
 	}
-	return ""
+	return 0
 }
 
 // 移動の意図が変わった人だけを、tick ごとにまとめて送る。
@@ -1229,21 +1248,22 @@ const file_office_v1_office_proto_rawDesc = "" +
 	"\aProfile\x12!\n" +
 	"\fdisplay_name\x18\x01 \x01(\tR\vdisplayName\x12)\n" +
 	"\x06gender\x18\x02 \x01(\x0e2\x11.office.v1.GenderR\x06gender\x12\x1b\n" +
-	"\ticon_hash\x18\x03 \x01(\tR\biconHash\"\xc3\x01\n" +
-	"\tMoveState\x12\x1b\n" +
-	"\tplayer_id\x18\x01 \x01(\tR\bplayerId\x12\f\n" +
+	"\ticon_hash\x18\x03 \x01(\tR\biconHash\"\xc9\x01\n" +
+	"\tMoveState\x12\x10\n" +
+	"\x03pid\x18\t \x01(\rR\x03pid\x12\f\n" +
 	"\x01x\x18\x02 \x01(\x05R\x01x\x12\f\n" +
 	"\x01y\x18\x03 \x01(\x05R\x01y\x12\x13\n" +
-	"\x05dir_x\x18\x04 \x01(\x05R\x04dirX\x12\x13\n" +
-	"\x05dir_y\x18\x05 \x01(\x05R\x04dirY\x12\x1d\n" +
+	"\x05dir_x\x18\x04 \x01(\x11R\x04dirX\x12\x13\n" +
+	"\x05dir_y\x18\x05 \x01(\x11R\x04dirY\x12\x1d\n" +
 	"\n" +
 	"has_target\x18\x06 \x01(\bR\thasTarget\x12\x19\n" +
 	"\btarget_x\x18\a \x01(\x05R\atargetX\x12\x19\n" +
-	"\btarget_y\x18\b \x01(\x05R\atargetY\"r\n" +
+	"\btarget_y\x18\b \x01(\x05R\atargetYJ\x04\b\x01\x10\x02R\tplayer_id\"\x84\x01\n" +
 	"\x06Player\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12,\n" +
 	"\aprofile\x18\x02 \x01(\v2\x12.office.v1.ProfileR\aprofile\x12*\n" +
-	"\x05state\x18\x03 \x01(\v2\x14.office.v1.MoveStateR\x05state\"{\n" +
+	"\x05state\x18\x03 \x01(\v2\x14.office.v1.MoveStateR\x05state\x12\x10\n" +
+	"\x03pid\x18\x04 \x01(\rR\x03pid\"{\n" +
 	"\x05Hello\x12\x1d\n" +
 	"\n" +
 	"room_token\x18\x01 \x01(\tR\troomToken\x12%\n" +
@@ -1262,7 +1282,7 @@ const file_office_v1_office_proto_rawDesc = "" +
 	"\amove_to\x18\x02 \x01(\v2\x11.office.v1.MoveToH\x00R\x06moveTo\x12/\n" +
 	"\bmove_dir\x18\x03 \x01(\v2\x12.office.v1.MoveDirH\x00R\amoveDir\x12%\n" +
 	"\x04ping\x18\x04 \x01(\v2\x0f.office.v1.PingH\x00R\x04pingB\x06\n" +
-	"\x04body\"\xbc\x01\n" +
+	"\x04body\"\xd7\x01\n" +
 	"\aWelcome\x12\x1b\n" +
 	"\tplayer_id\x18\x01 \x01(\tR\bplayerId\x12\x12\n" +
 	"\x04tick\x18\x02 \x01(\rR\x04tick\x12\x1b\n" +
@@ -1270,12 +1290,13 @@ const file_office_v1_office_proto_rawDesc = "" +
 	"\x06map_id\x18\x04 \x01(\tR\x05mapId\x12\x1f\n" +
 	"\vmax_players\x18\x05 \x01(\rR\n" +
 	"maxPlayers\x12+\n" +
-	"\aplayers\x18\x06 \x03(\v2\x11.office.v1.PlayerR\aplayers\"9\n" +
+	"\aplayers\x18\x06 \x03(\v2\x11.office.v1.PlayerR\aplayers\x12\x19\n" +
+	"\bself_pid\x18\a \x01(\rR\aselfPid\"9\n" +
 	"\fPlayerJoined\x12)\n" +
-	"\x06player\x18\x01 \x01(\v2\x11.office.v1.PlayerR\x06player\")\n" +
+	"\x06player\x18\x01 \x01(\v2\x11.office.v1.PlayerR\x06player\"/\n" +
 	"\n" +
-	"PlayerLeft\x12\x1b\n" +
-	"\tplayer_id\x18\x01 \x01(\tR\bplayerId\"I\n" +
+	"PlayerLeft\x12\x10\n" +
+	"\x03pid\x18\x02 \x01(\rR\x03pidJ\x04\b\x01\x10\x02R\tplayer_id\"I\n" +
 	"\x05Moved\x12\x12\n" +
 	"\x04tick\x18\x01 \x01(\rR\x04tick\x12,\n" +
 	"\x06states\x18\x02 \x03(\v2\x14.office.v1.MoveStateR\x06states\"H\n" +

@@ -29,12 +29,17 @@ message Profile {
 }
 
 // 移動状態。クライアントは同じ sim で再生するため、位置と「意図」だけを持つ。
+//
+// 帯域のため、プレイヤーは文字列の ID ではなく、ルーム内の番号（pid）で指す。
+// 方向は負の値が多いので sint32（int32 の -1 は 10 バイトかかる）。
 message MoveState {
-  string player_id = 1;
+  reserved 1;
+  reserved "player_id";
+  uint32 pid = 9;
   int32 x = 2; // 位置（サブユニット。1 タイル = 256）
   int32 y = 3;
-  int32 dir_x = 4; // 方向入力（-1, 0, 1）。0,0 かつ has_target=false なら停止中
-  int32 dir_y = 5;
+  sint32 dir_x = 4; // 方向入力（-1, 0, 1）。0,0 かつ has_target=false なら停止中
+  sint32 dir_y = 5;
   bool has_target = 6; // クリック移動中か
   int32 target_x = 7;  // 目的地（タイル座標）
   int32 target_y = 8;
@@ -44,6 +49,7 @@ message Player {
   string id = 1;
   Profile profile = 2;
   MoveState state = 3;
+  uint32 pid = 4; // ルーム内の番号。以後の Moved / Sync / PlayerLeft はこの番号で指す
 }
 
 // ---- クライアント → サーバ ----
@@ -88,6 +94,7 @@ message Welcome {
   string map_id = 4;
   uint32 max_players = 5;
   repeated Player players = 6; // 自分を含む、現在の全員
+  uint32 self_pid = 7;         // 自分の pid
 }
 
 message PlayerJoined {
@@ -95,7 +102,9 @@ message PlayerJoined {
 }
 
 message PlayerLeft {
-  string player_id = 1;
+  reserved 1;
+  reserved "player_id";
+  uint32 pid = 2;
 }
 
 // 移動の意図が変わった人だけを、tick ごとにまとめて送る。

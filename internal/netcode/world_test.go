@@ -2,6 +2,7 @@ package netcode
 
 import (
 	"errors"
+	"hash/fnv"
 	"testing"
 
 	officev1 "github.com/o-ga09/gopher-office/gen/office/v1"
@@ -9,17 +10,24 @@ import (
 	"github.com/o-ga09/gopher-office/internal/wire"
 )
 
+// pid はテスト用に、ID から決まる番号を作る（ID が違えば番号も違う）。
+func pid(id string) uint32 {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(id))
+	return h.Sum32()
+}
+
 func idleState(id string, x, y int) *officev1.MoveState {
-	return &officev1.MoveState{PlayerId: id, X: int32(x), Y: int32(y)} //nolint:gosec // テスト用の小さな座標
+	return &officev1.MoveState{Pid: pid(id), X: int32(x), Y: int32(y)} //nolint:gosec // テスト用の小さな座標
 }
 
 func player(id, name string, g officev1.Gender, s *officev1.MoveState) *officev1.Player {
-	return &officev1.Player{Id: id, Profile: &officev1.Profile{DisplayName: name, Gender: g}, State: s}
+	return &officev1.Player{Id: id, Pid: pid(id), Profile: &officev1.Profile{DisplayName: name, Gender: g}, State: s}
 }
 
 func welcome(self string, players ...*officev1.Player) *officev1.ServerMessage {
 	return &officev1.ServerMessage{Body: &officev1.ServerMessage_Welcome{Welcome: &officev1.Welcome{
-		PlayerId: self, Tick: 5, TickRate: sim.TickRate, MaxPlayers: 200, Players: players,
+		PlayerId: self, SelfPid: pid(self), Tick: 5, TickRate: sim.TickRate, MaxPlayers: 200, Players: players,
 	}}}
 }
 
@@ -79,7 +87,7 @@ func TestJoinAndLeave(t *testing.T) {
 	if len(w.Players) != 3 || w.Players["new"].Gender != sim.GenderOther {
 		t.Fatal("PlayerJoined must add a player")
 	}
-	apply(t, w, &officev1.ServerMessage{Body: &officev1.ServerMessage_PlayerLeft{PlayerLeft: &officev1.PlayerLeft{PlayerId: "you"}}})
+	apply(t, w, &officev1.ServerMessage{Body: &officev1.ServerMessage_PlayerLeft{PlayerLeft: &officev1.PlayerLeft{Pid: pid("you")}}})
 	if len(w.Players) != 2 || w.Players["you"] != nil {
 		t.Fatal("PlayerLeft must remove the player")
 	}

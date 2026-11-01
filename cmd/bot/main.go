@@ -28,6 +28,7 @@ type stats struct {
 	moved     atomic.Int64
 	syncs     atomic.Int64
 	errors    atomic.Int64
+	bytes     atomic.Int64 // 受信した合計バイト数
 }
 
 func main() {
@@ -120,6 +121,11 @@ func runBot(ctx context.Context, i int, tg target, tiles []sim.Point, rng *rand.
 	defer c.Close()
 	st.connected.Add(1)
 	defer st.connected.Add(-1)
+	var counted int64
+	flush := func() { n := c.BytesRecv(); st.bytes.Add(n - counted); counted = n }
+	defer flush()
+	bytesTick := time.NewTicker(time.Second)
+	defer bytesTick.Stop()
 
 	next := time.NewTimer(randDuration(rng, 0, maxWait)) // 最初の動き出しもばらす
 	defer next.Stop()
@@ -141,6 +147,8 @@ func runBot(ctx context.Context, i int, tg target, tiles []sim.Point, rng *rand.
 				st.errors.Add(1)
 				return
 			}
+		case <-bytesTick.C:
+			flush()
 		case <-next.C:
 			t := tiles[rng.IntN(len(tiles))]
 			c.Send(&officev1.ClientMessage{Body: &officev1.ClientMessage_MoveTo{MoveTo: &officev1.MoveTo{X: int32(t.X), Y: int32(t.Y)}}}) //nolint:gosec // タイル座標は小さい
@@ -159,17 +167,21 @@ func randDuration(rng *rand.Rand, lo, hi time.Duration) time.Duration {
 func report(ctx context.Context, st *stats, target int) {
 	t := time.NewTicker(5 * time.Second)
 	defer t.Stop()
-	var lastMsgs, lastMoved, lastSyncs int64
+	var lastMsgs, lastMoved, lastSyncs, lastBytes int64
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 			msgs, moved, syncs := st.messages.Load(), st.moved.Load(), st.syncs.Load()
-			fmt.Printf("connected=%d/%d failed=%d recv/s=%d (moved/s=%d sync/s=%d) errors=%d\n",
+			bytes := st.bytes.Load()
+			conn := max(st.connected.Load(), 1)
+			perSec := float64(bytes-lastBytes) / 5
+			fmt.Printf("connected=%d/%d failed=%d recv/s=%d (moved/s=%d sync/s=%d) errors=%d  recv=%.2f MB/s total, %.1f KB/s per client (%.1f Mbps total)\n",
 				st.connected.Load(), target, st.failed.Load(),
-				(msgs-lastMsgs)/5, (moved-lastMoved)/5, (syncs-lastSyncs)/5, st.errors.Load())
-			lastMsgs, lastMoved, lastSyncs = msgs, moved, syncs
+				(msgs-lastMsgs)/5, (moved-lastMoved)/5, (syncs-lastSyncs)/5, st.errors.Load(),
+				perSec/1e6, perSec/float64(conn)/1e3, perSec*8/1e6)
+			lastMsgs, lastMoved, lastSyncs, lastBytes = msgs, moved, syncs, bytes
 		}
 	}
 }

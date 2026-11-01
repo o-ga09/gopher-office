@@ -36,7 +36,7 @@ func TestStateRoundTripReplaysSameTrajectory(t *testing.T) {
 		t.Fatal("second MoveTo failed")
 	}
 
-	client := ActorFromState(m, StateOf("p1", server))
+	client := ActorFromState(m, StateOf(1, server))
 	for i := 0; i < 200; i++ {
 		server.Step(m)
 		client.Step(m)
@@ -49,8 +49,8 @@ func TestStateRoundTripReplaysSameTrajectory(t *testing.T) {
 func TestStateOfDir(t *testing.T) {
 	a := sim.NewActor(sim.OfficeSpawn)
 	a.SetDir(1, 0)
-	s := StateOf("p1", a)
-	if s.GetPlayerId() != "p1" || s.GetDirX() != 1 || s.GetHasTarget() {
+	s := StateOf(1, a)
+	if s.GetPid() != 1 || s.GetDirX() != 1 || s.GetHasTarget() {
 		t.Fatalf("unexpected state: %v", s)
 	}
 	b := ActorFromState(sim.OfficeMap(), s)
@@ -62,7 +62,7 @@ func TestStateOfDir(t *testing.T) {
 func TestMarshalRoundTrip(t *testing.T) {
 	in := &officev1.ServerMessage{Body: &officev1.ServerMessage_Moved{Moved: &officev1.Moved{
 		Tick:   7,
-		States: []*officev1.MoveState{{PlayerId: "a", X: 1, Y: 2}},
+		States: []*officev1.MoveState{{Pid: 7, X: 1, Y: 2}},
 	}}}
 	b, err := Marshal(in)
 	if err != nil {
@@ -72,7 +72,7 @@ func TestMarshalRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.GetMoved().GetTick() != 7 || out.GetMoved().GetStates()[0].GetPlayerId() != "a" {
+	if out.GetMoved().GetTick() != 7 || out.GetMoved().GetStates()[0].GetPid() != 7 {
 		t.Fatalf("round trip mismatch: %v", out)
 	}
 	if _, err := UnmarshalClient([]byte{0xff, 0xff, 0xff}); err == nil {
@@ -84,7 +84,7 @@ func TestSameIntent(t *testing.T) {
 	m := sim.OfficeMap()
 	a := sim.NewActor(sim.OfficeSpawn)
 	a.MoveTo(m, sim.Point{X: 2, Y: 2})
-	s := StateOf("p1", a)
+	s := StateOf(1, a)
 	if !SameIntent(a, s) {
 		t.Fatal("same actor must have the same intent")
 	}

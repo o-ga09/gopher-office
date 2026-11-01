@@ -57,6 +57,10 @@ func (s *Server) Room() *Room { return s.room }
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/room", s.handleRoom)
+	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+		s.room.WriteMetrics(w)
+	})
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
@@ -122,6 +126,12 @@ func (s *Server) handshake(ctx context.Context, ws *websocket.Conn) (*conn, bool
 		return nil, false
 	}
 
+	if hello.GetClientVersion() != wire.ProtocolVersion {
+		s.log.Info("rejected: protocol version mismatch", "client", hello.GetClientVersion(), "server", wire.ProtocolVersion)
+		s.reject(ctx, ws, officev1.ErrorCode_ERROR_CODE_VERSION_MISMATCH, "client version mismatch; please reload the page")
+		return nil, false
+	}
+
 	id, err := s.cfg.Verifier.Verify(hello.GetRoomToken())
 	if err != nil {
 		s.log.Info("rejected: bad token", "err", err)
@@ -161,6 +171,8 @@ func (s *Server) writeLoop(ctx context.Context, ws *websocket.Conn, c *conn, can
 			if err != nil {
 				return
 			}
+			s.room.m.bytesSent.Add(int64(len(b)))
+			s.room.m.msgsSent.Add(1)
 		case <-c.done:
 			return
 		case <-ctx.Done():

@@ -409,6 +409,8 @@ func serverErrorText(err error) string {
 			return "The room is full."
 		case officev1.ErrorCode_ERROR_CODE_BAD_TOKEN:
 			return "The invitation is invalid or expired."
+		case officev1.ErrorCode_ERROR_CODE_VERSION_MISMATCH:
+			return "The game was updated.\nPlease reload the page."
 		case officev1.ErrorCode_ERROR_CODE_RATE_LIMITED:
 			return "Too many requests."
 		}
