@@ -10,6 +10,8 @@ import (
 	"math/rand/v2"
 	"os"
 	"os/signal"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -21,9 +23,57 @@ import (
 	"github.com/o-ga09/gopher-office/internal/sim"
 )
 
+// failures は、失敗を理由ごとに数える。理由が見えないと、「全員つながらない」ときに原因を切り分けられない。
+type failures struct {
+	mu sync.Mutex
+	n  map[string]int
+}
+
+const maxReasonRunes = 160
+
+// add は失敗を、段階（ゲスト登録・入室・WebSocket 接続など）と理由で記録する。
+func (f *failures) add(stage string, err error) {
+	reason, _, _ := strings.Cut(err.Error(), "\n")
+	if r := []rune(reason); len(r) > maxReasonRunes {
+		reason = string(r[:maxReasonRunes]) + "…"
+	}
+	key := stage + ": " + reason
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.n == nil {
+		f.n = map[string]int{}
+	}
+	f.n[key]++
+}
+
+// top は回数の多い順に、上位 k 件の理由を返す。
+func (f *failures) top(k int) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	keys := make([]string, 0, len(f.n))
+	for key := range f.n {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if f.n[keys[i]] != f.n[keys[j]] {
+			return f.n[keys[i]] > f.n[keys[j]]
+		}
+		return keys[i] < keys[j]
+	})
+	if len(keys) > k {
+		keys = keys[:k]
+	}
+	out := make([]string, len(keys))
+	for i, key := range keys {
+		out[i] = fmt.Sprintf("%d x %s", f.n[key], key)
+	}
+	return out
+}
+
 type stats struct {
 	connected atomic.Int64
 	failed    atomic.Int64
+	reasons   failures
 	messages  atomic.Int64
 	moved     atomic.Int64
 	syncs     atomic.Int64
@@ -81,6 +131,20 @@ func main() {
 	}
 	wg.Wait()
 	fmt.Printf("done: connected=%d failed=%d messages=%d errors=%d\n", st.connected.Load(), st.failed.Load(), st.messages.Load(), st.errors.Load())
+	printFailures(&st, 10)
+}
+
+// printFailures は、失敗の理由を回数の多い順に表示する。
+func printFailures(st *stats, k int) {
+	for _, line := range st.reasons.top(k) {
+		fmt.Println("  failure:", line)
+	}
+}
+
+// fail は接続の失敗を数えて、理由を記録する。
+func (s *stats) fail(stage string, err error) {
+	s.failed.Add(1)
+	s.reasons.add(stage, err)
 }
 
 // target は bot のつなぎ先。api と invite があれば API 経由で入室し、無ければ server に直接つなぐ。
@@ -98,16 +162,17 @@ func runBot(ctx context.Context, i int, tg target, tiles []sim.Point, rng *rand.
 		cl := apiclient.New(tg.api)
 		if _, err := cl.CreateGuest(dctx, name, gender); err != nil {
 			cancel()
-			st.failed.Add(1)
+			st.fail("create guest", err)
 			return
 		}
 		j, err := cl.Join(dctx, tg.invite)
 		if err != nil {
 			cancel()
-			st.failed.Add(1)
+			st.fail("join", err)
 			return
 		}
-		url, token = j.ServerURL, j.RoomToken
+		// ゲートウェイは接続先を決めるために URL の token を見る。付け忘れると 401 で全員つながらない
+		url, token = j.DialURL(), j.RoomToken
 	}
 	c, err := netcode.Dial(dctx, url, &officev1.Hello{
 		RoomToken: token,
@@ -115,7 +180,7 @@ func runBot(ctx context.Context, i int, tg target, tiles []sim.Point, rng *rand.
 	})
 	cancel()
 	if err != nil {
-		st.failed.Add(1)
+		st.fail("websocket", err)
 		return
 	}
 	defer c.Close()
@@ -145,6 +210,7 @@ func runBot(ctx context.Context, i int, tg target, tiles []sim.Point, rng *rand.
 				st.syncs.Add(1)
 			case m.GetError() != nil:
 				st.errors.Add(1)
+				st.reasons.add("server rejected", fmt.Errorf("%v: %s", m.GetError().GetCode(), m.GetError().GetMessage()))
 				return
 			}
 		case <-bytesTick.C:
@@ -182,6 +248,7 @@ func report(ctx context.Context, st *stats, target int) {
 				(msgs-lastMsgs)/5, (moved-lastMoved)/5, (syncs-lastSyncs)/5, st.errors.Load(),
 				perSec/1e6, perSec/float64(conn)/1e3, perSec*8/1e6)
 			lastMsgs, lastMoved, lastSyncs, lastBytes = msgs, moved, syncs, bytes
+			printFailures(st, 3)
 		}
 	}
 }

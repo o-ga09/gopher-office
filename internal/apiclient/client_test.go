@@ -161,3 +161,17 @@ func TestClientIcon(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestJoinResultDialURL(t *testing.T) {
+	for _, c := range []struct{ url, token, want string }{
+		{"wss://office.example/room", "a.b.c", "wss://office.example/room?token=a.b.c"},
+		{"ws://localhost:7654/room?x=1", "a b", "ws://localhost:7654/room?token=a+b&x=1"},
+		{"wss://office.example/room", "x&y=z", "wss://office.example/room?token=x%26y%3Dz"},   // トークンに & や = があっても、別のクエリにならない
+		{"wss://office.example/room?token=old", "new", "wss://office.example/room?token=new"}, // 既存の token は置き換える
+	} {
+		j := apiclient.JoinResult{ServerURL: c.url, RoomToken: c.token}
+		if got := j.DialURL(); got != c.want {
+			t.Errorf("DialURL(%q, %q) = %q, want %q", c.url, c.token, got, c.want)
+		}
+	}
+}
