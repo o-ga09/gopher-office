@@ -86,8 +86,8 @@ make invite       # ワークスペースを作って招待 URL を表示する
 | P2a | proto 定義、`cmd/gameserver`（`-local`）、クライアントのオンライン接続、`cmd/bot` | ✅ |
 | P2b | API（ゲスト認証、ワークスペース、招待URL入室、roomToken の検証）、マイグレーション | ✅ |
 | P2c | アイコン画像のアップロード・配信、プロフィール編集の UI | ✅ |
-| P3 | Agones 導入、Fleet、`cmd/gateway`、Tunnel 公開 | 🚧 アプリ側は実装済み。クラスタでの動作確認とデプロイが残る（[infra の PR](https://github.com/o-ga09/infra/pull/10)） |
-| P4 | 200 体の負荷試験（Sync の帯域削減を含む）、事前録画、LT リハーサル | ⬜ |
+| P3 | Agones 導入、Fleet、`cmd/gateway`、Tunnel 公開 | ✅ |
+| P4 | 200 体の負荷試験（Sync の帯域削減を含む）、事前録画、LT リハーサル | ✅ |
 | P5 | P2P 音声通話、近接音声、動画 | ⬜ |
 | P6 | 複数ルーム・ワークスペース UI、永続アカウント | ⬜ |
 

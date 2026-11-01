@@ -57,6 +57,21 @@ type JoinResult struct {
 	} `json:"workspace"`
 }
 
+// DialURL は、GameServer（ゲートウェイ経由）に WebSocket で接続するための URL を返す。
+// ゲートウェイは接続先の GameServer を決めるために URL の token クエリを見る（ブラウザの WebSocket は
+// ヘッダを付けられない）。ServerURL にすでにクエリがあれば、それを保つ。
+// GameServer は Hello のトークンを検証し、URL のほうは見ない。
+func (j JoinResult) DialURL() string {
+	u, err := url.Parse(j.ServerURL)
+	if err != nil {
+		return j.ServerURL
+	}
+	q := u.Query()
+	q.Set("token", j.RoomToken)
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
 // Workspace はワークスペース。
 type Workspace struct {
 	ID         string `json:"id"`

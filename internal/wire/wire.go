@@ -8,6 +8,11 @@ import (
 	"github.com/o-ga09/gopher-office/internal/sim"
 )
 
+// ProtocolVersion は、クライアントとサーバが話すプロトコルの版。互換性のない変更（proto の意味が変わる変更）の
+// たびに上げる。Hello で照合し、違えばサーバが VERSION_MISMATCH で断る（古いまま動き続ける GameServer と、
+// 新しいクライアントが混ざっても、おかしな表示にならないように）。
+const ProtocolVersion = "2"
+
 // GenderToProto は sim.Gender を proto の Gender に変換する。
 func GenderToProto(g sim.Gender) officev1.Gender {
 	switch g {
@@ -33,14 +38,14 @@ func GenderFromProto(g officev1.Gender) sim.Gender {
 }
 
 // StateOf は Actor の現在の位置と移動の意図を MoveState にする。
-func StateOf(id string, a *sim.Actor) *officev1.MoveState {
+func StateOf(pid uint32, a *sim.Actor) *officev1.MoveState {
 	dx, dy := a.Dir()
 	s := &officev1.MoveState{
-		PlayerId: id,
-		X:        int32(a.X), //nolint:gosec // 座標はマップ内（数万サブユニット以下）で int32 に収まる
-		Y:        int32(a.Y), //nolint:gosec // 同上
-		DirX:     int32(dx),  //nolint:gosec // 方向入力は -1〜1
-		DirY:     int32(dy),  //nolint:gosec // 同上
+		Pid:  pid,
+		X:    int32(a.X), //nolint:gosec // 座標はマップ内（数万サブユニット以下）で int32 に収まる
+		Y:    int32(a.Y), //nolint:gosec // 同上
+		DirX: int32(dx),  //nolint:gosec // 方向入力は -1〜1
+		DirY: int32(dy),  //nolint:gosec // 同上
 	}
 	if t, ok := a.Target(); ok {
 		s.HasTarget, s.TargetX, s.TargetY = true, int32(t.X), int32(t.Y) //nolint:gosec // タイル座標は小さい

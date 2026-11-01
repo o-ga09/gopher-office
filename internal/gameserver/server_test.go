@@ -70,8 +70,9 @@ func (c *testClient) send(m *officev1.ClientMessage) {
 
 func (c *testClient) hello(token, name string, gender officev1.Gender) {
 	c.send(&officev1.ClientMessage{Body: &officev1.ClientMessage_Hello{Hello: &officev1.Hello{
-		RoomToken: token,
-		Profile:   &officev1.Profile{DisplayName: name, Gender: gender},
+		RoomToken:     token,
+		ClientVersion: wire.ProtocolVersion,
+		Profile:       &officev1.Profile{DisplayName: name, Gender: gender},
 	}}})
 }
 
@@ -111,8 +112,8 @@ func TestTwoClientsSeeEachOtherMove(t *testing.T) {
 	b := dial(t, url)
 	b.hello("", "bob", officev1.Gender_GENDER_MALE)
 	wb := b.recvUntil(isWelcome).GetWelcome()
-	if wa.GetPlayerId() == wb.GetPlayerId() {
-		t.Fatal("players must get distinct IDs")
+	if wa.GetPlayerId() == wb.GetPlayerId() || wa.GetSelfPid() == wb.GetSelfPid() || wa.GetSelfPid() == 0 {
+		t.Fatal("players must get distinct IDs and room numbers")
 	}
 	if len(wb.GetPlayers()) != 2 {
 		t.Fatalf("b must see both players, got %d", len(wb.GetPlayers()))
@@ -126,14 +127,14 @@ func TestTwoClientsSeeEachOtherMove(t *testing.T) {
 	a.send(&officev1.ClientMessage{Body: &officev1.ClientMessage_MoveTo{MoveTo: &officev1.MoveTo{X: 2, Y: 2}}})
 	moved := b.recvUntil(func(m *officev1.ServerMessage) bool { return m.GetMoved() != nil }).GetMoved()
 	s := moved.GetStates()[0]
-	if s.GetPlayerId() != wa.GetPlayerId() || !s.GetHasTarget() || s.GetTargetX() != 2 || s.GetTargetY() != 2 {
+	if s.GetPid() != wa.GetSelfPid() || !s.GetHasTarget() || s.GetTargetX() != 2 || s.GetTargetY() != 2 {
 		t.Fatalf("b must see a's move, got %v", s)
 	}
 
 	// 切断すると、残った側に PlayerLeft が届く
 	_ = a.ws.Close(websocket.StatusNormalClosure, "bye")
 	left := b.recvUntil(func(m *officev1.ServerMessage) bool { return m.GetPlayerLeft() != nil }).GetPlayerLeft()
-	if left.GetPlayerId() != wa.GetPlayerId() {
+	if left.GetPid() != wa.GetSelfPid() {
 		t.Fatalf("unexpected PlayerLeft: %v", left)
 	}
 }
@@ -246,5 +247,18 @@ func TestFloodingIsRateLimited(t *testing.T) {
 	m := c.recvUntil(func(m *officev1.ServerMessage) bool { return m.GetError() != nil })
 	if m.GetError().GetCode() != officev1.ErrorCode_ERROR_CODE_RATE_LIMITED {
 		t.Fatalf("error code = %v", m.GetError().GetCode())
+	}
+}
+
+func TestHelloWithAnotherProtocolVersionIsRejected(t *testing.T) {
+	url := startServer(t, Config{MaxPlayers: 10})
+	for _, version := range []string{"", "1", "999"} {
+		c := dial(t, url)
+		c.send(&officev1.ClientMessage{Body: &officev1.ClientMessage_Hello{Hello: &officev1.Hello{
+			ClientVersion: version, Profile: &officev1.Profile{DisplayName: "old"},
+		}}})
+		if e := c.recvUntil(func(m *officev1.ServerMessage) bool { return m.GetError() != nil }).GetError(); e.GetCode() != officev1.ErrorCode_ERROR_CODE_VERSION_MISMATCH {
+			t.Fatalf("version %q: got %v, want VERSION_MISMATCH", version, e)
+		}
 	}
 }

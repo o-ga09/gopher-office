@@ -33,7 +33,8 @@ type Client struct {
 	in     chan *officev1.ServerMessage
 	out    chan []byte
 
-	rttNanos atomic.Int64
+	rttNanos  atomic.Int64
+	bytesRecv atomic.Int64
 
 	errMu sync.Mutex
 	err   error
@@ -41,6 +42,9 @@ type Client struct {
 
 // Dial は url に接続して Hello を送る。以後のメッセージは Recv から受け取る。
 func Dial(ctx context.Context, url string, hello *officev1.Hello) (*Client, error) {
+	if hello.GetClientVersion() == "" {
+		hello.ClientVersion = wire.ProtocolVersion
+	}
 	ws, _, err := websocket.Dial(ctx, url, nil)
 	if err != nil {
 		return nil, err
@@ -83,6 +87,9 @@ func (c *Client) Err() error {
 // RTT は直近の往復遅延を返す。まだ計測できていなければ 0。
 func (c *Client) RTT() time.Duration { return time.Duration(c.rttNanos.Load()) }
 
+// BytesRecv は、これまでに受信したペイロードの合計バイト数を返す（負荷試験の帯域の計測用）。
+func (c *Client) BytesRecv() int64 { return c.bytesRecv.Load() }
+
 // Send はメッセージを送信キューに積む。キューが満杯なら、入力を捨てて false を返す。
 func (c *Client) Send(m *officev1.ClientMessage) bool {
 	b, err := wire.Marshal(m)
@@ -123,6 +130,7 @@ func (c *Client) readLoop(ctx context.Context) {
 			c.fail(err)
 			return
 		}
+		c.bytesRecv.Add(int64(len(data)))
 		msg, err := wire.UnmarshalServer(data)
 		if err != nil {
 			c.fail(err)

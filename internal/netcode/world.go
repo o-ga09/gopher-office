@@ -33,6 +33,7 @@ type Player struct {
 	Name     string
 	Gender   sim.Gender
 	IconHash string
+	PID      uint32 // ルーム内の番号（サーバからの Moved / Sync / PlayerLeft はこれで指す）
 	Actor    *sim.Actor
 
 	// 直前の tick の位置。描画で tick 間を補間するために使う。
@@ -51,6 +52,7 @@ type World struct {
 	Map        *sim.Map
 	SelfID     string
 	Players    map[string]*Player
+	pids       map[uint32]*Player
 	Tick       uint32
 	MaxPlayers int
 	// Ready は Welcome を受け取って、世界に入れたことを表す。
@@ -59,7 +61,7 @@ type World struct {
 
 // NewWorld は空の世界を作る。
 func NewWorld(m *sim.Map) *World {
-	return &World{Map: m, Players: make(map[string]*Player)}
+	return &World{Map: m, Players: make(map[string]*Player), pids: make(map[uint32]*Player)}
 }
 
 // LocalPlayerID はオフライン（サーバなし）のときの自分の ID。
@@ -82,6 +84,7 @@ func (w *World) newPlayer(p *officev1.Player) *Player {
 	a := wire.ActorFromState(w.Map, p.GetState())
 	return &Player{
 		ID:       p.GetId(),
+		PID:      p.GetPid(),
 		Name:     p.GetProfile().GetDisplayName(),
 		Gender:   wire.GenderFromProto(p.GetProfile().GetGender()),
 		IconHash: p.GetProfile().GetIconHash(),
@@ -89,6 +92,15 @@ func (w *World) newPlayer(p *officev1.Player) *Player {
 		PrevX:    a.X,
 		PrevY:    a.Y,
 	}
+}
+
+// add はプレイヤーを世界に加える。同じ ID で入り直した古い番号は消す。
+func (w *World) add(p *Player) {
+	if old := w.Players[p.ID]; old != nil {
+		delete(w.pids, old.PID)
+	}
+	w.Players[p.ID] = p
+	w.pids[p.PID] = p
 }
 
 // Apply はサーバのメッセージを世界に反映する。Error を受け取った場合は *ServerError を返す。
@@ -99,23 +111,27 @@ func (w *World) Apply(msg *officev1.ServerMessage) error {
 		w.Tick = b.Welcome.GetTick()
 		w.MaxPlayers = int(b.Welcome.GetMaxPlayers())
 		w.Players = make(map[string]*Player, len(b.Welcome.GetPlayers()))
+		w.pids = make(map[uint32]*Player, len(b.Welcome.GetPlayers()))
 		for _, p := range b.Welcome.GetPlayers() {
-			w.Players[p.GetId()] = w.newPlayer(p)
+			w.add(w.newPlayer(p))
 		}
 		w.Ready = w.Self() != nil
 
 	case *officev1.ServerMessage_PlayerJoined:
 		if p := b.PlayerJoined.GetPlayer(); p != nil && p.GetId() != "" {
-			w.Players[p.GetId()] = w.newPlayer(p)
+			w.add(w.newPlayer(p))
 		}
 
 	case *officev1.ServerMessage_PlayerLeft:
-		delete(w.Players, b.PlayerLeft.GetPlayerId())
+		if p := w.pids[b.PlayerLeft.GetPid()]; p != nil {
+			delete(w.Players, p.ID)
+			delete(w.pids, p.PID)
+		}
 
 	case *officev1.ServerMessage_Moved:
 		w.Tick = b.Moved.GetTick()
 		for _, s := range b.Moved.GetStates() {
-			p := w.Players[s.GetPlayerId()]
+			p := w.pids[s.GetPid()]
 			if p == nil || p.ID == w.SelfID {
 				continue // 自分の移動はすでに予測で反映している
 			}
@@ -138,7 +154,7 @@ func (w *World) Apply(msg *officev1.ServerMessage) error {
 
 // correct は Sync の状態を使って、ドリフトを補正する。
 func (w *World) correct(s *officev1.MoveState) {
-	p := w.Players[s.GetPlayerId()]
+	p := w.pids[s.GetPid()]
 	if p == nil {
 		return
 	}

@@ -21,6 +21,8 @@ import (
 const (
 	// syncEvery は全員の状態を配る間隔（tick）。1Hz。
 	syncEvery = sim.TickRate
+	// syncPlayersPerSecond は、Sync の間隔を 1 秒延ばす人数の単位（syncInterval 参照）。
+	syncPlayersPerSecond = 100
 	// outBuffer は接続ごとの送信キューの長さ。
 	outBuffer = 256
 	// cmdBuffer はルームへのコマンドキューの長さ。
@@ -46,11 +48,14 @@ type Config struct {
 
 // conn はルームから見た 1 接続。actor / dirty / kicked は Run の goroutine だけが触る。
 type conn struct {
-	id      string
-	profile *officev1.Profile
-	actor   *sim.Actor
-	dirty   bool // 今 tick で移動の意図が変わった
-	kicked  bool // 追い出し済み（以後は送らない）
+	id  string
+	pid uint32 // ルーム内の番号（入室時に決まる）
+	// idleSynced は、止まっている状態を Sync で送り済みか。動き出すと false に戻る
+	idleSynced bool
+	profile    *officev1.Profile
+	actor      *sim.Actor
+	dirty      bool // 今 tick で移動の意図が変わった
+	kicked     bool // 追い出し済み（以後は送らない）
 
 	out  chan []byte
 	done chan struct{}
@@ -97,11 +102,13 @@ type Room struct {
 
 	players    map[string]*conn
 	joinCount  int
+	nextPID    uint32 // 入室のたびに増やす。ルームが続く間は再利用しない
 	walkable   []sim.Point
 	tick       uint32
 	emptySince time.Time
 	idleFired  bool
 
+	m       metrics
 	armedAt atomic.Int64 // Arm を呼んだ時刻（UnixNano）。0 なら未了
 
 	serverTick atomic.Uint32
@@ -156,6 +163,7 @@ func (r *Room) Run(ctx context.Context) {
 			r.handle(cmd)
 		case now := <-ticker.C:
 			r.step(now)
+			r.m.observeTick(time.Since(now), time.Second/sim.TickRate)
 		}
 	}
 }
@@ -199,6 +207,8 @@ func (r *Room) join(c *conn) joinResult {
 
 	c.actor = sim.NewActor(r.spawnTile())
 	r.joinCount++
+	r.nextPID++
+	c.pid = r.nextPID
 	r.players[c.id] = c
 	r.numPlayers.Store(int32(len(r.players))) //nolint:gosec // 人数は上限（数百）で int32 に収まる
 
@@ -222,7 +232,7 @@ func (r *Room) remove(c *conn) {
 		r.emptySince = time.Now()
 	}
 	left := r.encode(&officev1.ServerMessage{Body: &officev1.ServerMessage_PlayerLeft{
-		PlayerLeft: &officev1.PlayerLeft{PlayerId: c.id},
+		PlayerLeft: &officev1.PlayerLeft{Pid: c.pid},
 	}})
 	for _, o := range r.players {
 		r.send(o, left, false)
@@ -256,7 +266,7 @@ func (r *Room) step(now time.Time) {
 	var moved []*officev1.MoveState
 	for _, c := range r.players {
 		if c.dirty {
-			moved = append(moved, wire.StateOf(c.id, c.actor))
+			moved = append(moved, wire.StateOf(c.pid, c.actor))
 			c.dirty = false
 		}
 	}
@@ -272,14 +282,25 @@ func (r *Room) step(now time.Time) {
 	}
 
 	// ドリフト補正。遅い接続では捨ててよい
-	if r.tick%syncEvery == 0 && len(r.players) > 0 {
+	if len(r.players) > 0 && r.tick%syncInterval(len(r.players)) == 0 {
+		// 止まっている人は、止まった直後に 1 回だけ送る。以後は位置が変わらず、クライアントも知っているので省く
+		// （人数が多いほど、帯域のほとんどが Sync になるため）
 		states := make([]*officev1.MoveState, 0, len(r.players))
 		for _, c := range r.players {
-			states = append(states, wire.StateOf(c.id, c.actor))
+			if moving(c.actor) {
+				c.idleSynced = false
+			} else if c.idleSynced {
+				continue
+			} else {
+				c.idleSynced = true
+			}
+			states = append(states, wire.StateOf(c.pid, c.actor))
 		}
-		b := r.encode(&officev1.ServerMessage{Body: &officev1.ServerMessage_Sync{Sync: &officev1.Sync{Tick: r.tick, States: states}}})
-		for _, c := range r.players {
-			r.send(c, b, true)
+		if len(states) > 0 {
+			b := r.encode(&officev1.ServerMessage{Body: &officev1.ServerMessage_Sync{Sync: &officev1.Sync{Tick: r.tick, States: states}}})
+			for _, c := range r.players {
+				r.send(c, b, true)
+			}
 		}
 	}
 
@@ -309,8 +330,10 @@ func (r *Room) send(c *conn, b []byte, droppable bool) {
 	case c.out <- b:
 	default:
 		if droppable {
+			r.m.dropped.Add(1)
 			return
 		}
+		r.m.kicked.Add(1)
 		c.kicked = true
 		r.log.Warn("kick slow consumer", "player", c.id)
 		c.shutdown("slow consumer")
@@ -327,7 +350,7 @@ func (r *Room) encode(m *officev1.ServerMessage) []byte {
 }
 
 func (r *Room) playerOf(c *conn) *officev1.Player {
-	return &officev1.Player{Id: c.id, Profile: c.profile, State: wire.StateOf(c.id, c.actor)}
+	return &officev1.Player{Id: c.id, Pid: c.pid, Profile: c.profile, State: wire.StateOf(c.pid, c.actor)}
 }
 
 func (r *Room) welcome(c *conn) *officev1.Welcome {
@@ -337,6 +360,7 @@ func (r *Room) welcome(c *conn) *officev1.Welcome {
 	}
 	return &officev1.Welcome{
 		PlayerId:   c.id,
+		SelfPid:    c.pid,
 		Tick:       r.tick,
 		TickRate:   sim.TickRate,
 		MapId:      r.cfg.MapID,
@@ -359,4 +383,20 @@ func newPlayerID() string {
 	var b [8]byte
 	_, _ = rand.Read(b[:]) // crypto/rand は失敗しない（Go 1.24 以降）
 	return hex.EncodeToString(b[:])
+}
+
+// moving は、方向入力またはクリック移動の目的地を持っている（動いている途中の）ときに true。
+func moving(a *sim.Actor) bool {
+	if dx, dy := a.Dir(); dx != 0 || dy != 0 {
+		return true
+	}
+	_, ok := a.Target()
+	return ok
+}
+
+// syncInterval は Sync を送る間隔（tick）。100 人までは 1 秒ごと、以後は 100 人増えるごとに 1 秒ずつ延ばす。
+// Sync は、決定的な再生のずれを直すための保険で、ずれは普通は起きない。人数が増えるほど 1 回が大きくなり、
+// 送る相手も増える（帯域は人数の 2 乗に比例する）ため、間引いて帯域の伸びを抑える。
+func syncInterval(players int) uint32 {
+	return syncEvery * uint32((players+syncPlayersPerSecond-1)/syncPlayersPerSecond) //nolint:gosec // 人数は上限（数百）で小さい
 }

@@ -112,7 +112,7 @@ func TestLeaveNotifiesOthers(t *testing.T) {
 
 	r.handle(leaveCmd{c: b})
 	left := drain(t, a)
-	if len(left) != 1 || left[0].GetPlayerLeft().GetPlayerId() != "b" {
+	if len(left) != 1 || left[0].GetPlayerLeft().GetPid() != b.pid {
 		t.Fatalf("want PlayerLeft(b), got %v", left)
 	}
 	if r.Players() != 1 {
@@ -145,7 +145,7 @@ func TestMoveToBroadcastsPreStepStateThenMoves(t *testing.T) {
 			t.Fatalf("%s: want one Moved, got %v", c.id, msgs)
 		}
 		s := msgs[0].GetMoved().GetStates()[0]
-		if s.GetPlayerId() != "a" || !s.GetHasTarget() || s.GetTargetX() != 2 || s.GetTargetY() != 2 {
+		if s.GetPid() != a.pid || !s.GetHasTarget() || s.GetTargetX() != 2 || s.GetTargetY() != 2 {
 			t.Fatalf("unexpected state: %v", s)
 		}
 		// 状態は Step の前の位置（クライアントが同じ軌跡を再生するため）
@@ -212,7 +212,10 @@ func TestMoveDirMovesAndStopIsBroadcast(t *testing.T) {
 func TestSyncEveryOneSecond(t *testing.T) {
 	r := newTestRoom(10)
 	a := joinTestConn(t, r, "a")
-	joinTestConn(t, r, "b")
+	b := joinTestConn(t, r, "b")
+	r.handle(inputCmd{c: a, msg: moveDir(1, 0)}) // 動いている人は、毎回 Sync に載る
+	r.handle(inputCmd{c: b, msg: moveDir(-1, 0)})
+	r.step(time.Now())
 	drain(t, a)
 
 	var syncs int
@@ -232,9 +235,63 @@ func TestSyncEveryOneSecond(t *testing.T) {
 	}
 }
 
+func syncStates(t *testing.T, c *conn) (n int, pids []uint32) {
+	t.Helper()
+	for _, m := range drain(t, c) {
+		if s := m.GetSync(); s != nil {
+			n++
+			for _, st := range s.GetStates() {
+				pids = append(pids, st.GetPid())
+			}
+		}
+	}
+	return n, pids
+}
+
+// 止まっている人は、止まった直後に 1 回だけ Sync に載り、以後は省かれる（帯域のため）。
+func TestSyncOmitsPlayersWhoStayStill(t *testing.T) {
+	r := newTestRoom(10)
+	a := joinTestConn(t, r, "a")
+	b := joinTestConn(t, r, "b")
+	r.handle(inputCmd{c: a, msg: moveDir(1, 0)})
+	drain(t, a)
+
+	second := func() {
+		for i := 0; i < syncEvery; i++ {
+			r.step(time.Now())
+		}
+	}
+
+	second() // 最初は、止まっている b も 1 回載る
+	if n, pids := syncStates(t, a); n != 1 || len(pids) != 2 {
+		t.Fatalf("first sync: n=%d pids=%v, want both players once", n, pids)
+	}
+	second() // b は省かれ、動いている a だけ
+	if n, pids := syncStates(t, a); n != 1 || len(pids) != 1 || pids[0] != a.pid {
+		t.Fatalf("second sync: n=%d pids=%v, want only a (%d)", n, pids, a.pid)
+	}
+
+	r.handle(inputCmd{c: a, msg: moveDir(0, 0)}) // a も止まる。止まった直後に 1 回だけ載る
+	second()
+	if n, pids := syncStates(t, a); n != 1 || len(pids) != 1 || pids[0] != a.pid {
+		t.Fatalf("after stopping: n=%d pids=%v, want a once", n, pids)
+	}
+	second() // 全員が止まっているので、Sync 自体を送らない
+	if n, _ := syncStates(t, a); n != 0 {
+		t.Fatalf("all idle: %d syncs were sent, want none", n)
+	}
+
+	r.handle(inputCmd{c: b, msg: moveDir(0, 1)}) // b が動き出すと、また載る
+	second()
+	if _, pids := syncStates(t, a); len(pids) != 1 || pids[0] != b.pid {
+		t.Fatalf("b moving again: pids=%v, want b (%d)", pids, b.pid)
+	}
+}
+
 func TestSlowConsumerIsKickedButSyncIsOnlyDropped(t *testing.T) {
 	r := newTestRoom(10)
 	slow := joinTestConn(t, r, "slow")
+	r.handle(inputCmd{c: slow, msg: moveDir(1, 0)}) // 動いている間は Sync が流れ続ける
 	drain(t, slow)
 
 	// Sync だけが溜まっても追い出さない（捨てる）
@@ -351,5 +408,13 @@ func TestDeferredIdleCountsFromArm(t *testing.T) {
 	r.step(time.Now().Add(2 * time.Minute))
 	if fired != 1 {
 		t.Fatalf("fired = %d, want 1", fired)
+	}
+}
+
+func TestSyncIntervalGrowsWithPlayers(t *testing.T) {
+	for n, want := range map[int]uint32{1: syncEvery, 100: syncEvery, 101: 2 * syncEvery, 200: 2 * syncEvery, 201: 3 * syncEvery, 500: 5 * syncEvery} {
+		if got := syncInterval(n); got != want {
+			t.Errorf("syncInterval(%d) = %d, want %d", n, got, want)
+		}
 	}
 }
