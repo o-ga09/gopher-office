@@ -19,7 +19,7 @@ const (
 	helloTimeout = 10 * time.Second
 	writeTimeout = 5 * time.Second
 	// maxFrameBytes はクライアントからの 1 フレームの上限。入力メッセージは数十バイトしかない。
-	maxFrameBytes = 4 << 10
+	maxFrameBytes = 16 << 10
 	// 受信メッセージのレート制限（1 接続あたり）。移動入力は数 Hz なので十分な余裕がある。
 	rateLimitPerSec = 60
 	rateBurst       = 120
@@ -211,6 +211,14 @@ func (s *Server) readLoop(ctx context.Context, ws *websocket.Conn, c *conn) {
 				case c.out <- pong:
 				default: // 混んでいるときの Pong は捨ててよい
 				}
+			}
+		case *officev1.ClientMessage_Signal:
+			if len(b.Signal.GetPayload()) > maxSignalPayload {
+				s.reject(ctx, ws, officev1.ErrorCode_ERROR_CODE_BAD_REQUEST, "signal too large")
+				return
+			}
+			if !s.room.submit(ctx, signalCmd{from: c, to: b.Signal.GetPid(), payload: b.Signal.GetPayload()}) {
+				return
 			}
 		case *officev1.ClientMessage_MoveTo, *officev1.ClientMessage_MoveDir:
 			if !s.room.submit(ctx, inputCmd{c: c, msg: msg}) {

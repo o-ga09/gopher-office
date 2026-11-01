@@ -574,6 +574,60 @@ func (x *Ping) GetClientTimeMs() int64 {
 	return 0
 }
 
+// 通話（WebRTC）のシグナリング。SDP / ICE の中身は不透明なバイト列で、サーバは宛先へ中継するだけ。
+// 設計: docs/design.md §11
+type Signal struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Pid           uint32                 `protobuf:"varint,1,opt,name=pid,proto3" json:"pid,omitempty"`        // C→S: 宛先の pid / S→C: 送り主の pid
+	Payload       []byte                 `protobuf:"bytes,2,opt,name=payload,proto3" json:"payload,omitempty"` // JSON（offer / answer / candidate）。最大 12000 バイト
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Signal) Reset() {
+	*x = Signal{}
+	mi := &file_office_v1_office_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Signal) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Signal) ProtoMessage() {}
+
+func (x *Signal) ProtoReflect() protoreflect.Message {
+	mi := &file_office_v1_office_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Signal.ProtoReflect.Descriptor instead.
+func (*Signal) Descriptor() ([]byte, []int) {
+	return file_office_v1_office_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *Signal) GetPid() uint32 {
+	if x != nil {
+		return x.Pid
+	}
+	return 0
+}
+
+func (x *Signal) GetPayload() []byte {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
 type ClientMessage struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Body:
@@ -582,6 +636,7 @@ type ClientMessage struct {
 	//	*ClientMessage_MoveTo
 	//	*ClientMessage_MoveDir
 	//	*ClientMessage_Ping
+	//	*ClientMessage_Signal
 	Body          isClientMessage_Body `protobuf_oneof:"body"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -589,7 +644,7 @@ type ClientMessage struct {
 
 func (x *ClientMessage) Reset() {
 	*x = ClientMessage{}
-	mi := &file_office_v1_office_proto_msgTypes[7]
+	mi := &file_office_v1_office_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -601,7 +656,7 @@ func (x *ClientMessage) String() string {
 func (*ClientMessage) ProtoMessage() {}
 
 func (x *ClientMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_office_v1_office_proto_msgTypes[7]
+	mi := &file_office_v1_office_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -614,7 +669,7 @@ func (x *ClientMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClientMessage.ProtoReflect.Descriptor instead.
 func (*ClientMessage) Descriptor() ([]byte, []int) {
-	return file_office_v1_office_proto_rawDescGZIP(), []int{7}
+	return file_office_v1_office_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ClientMessage) GetBody() isClientMessage_Body {
@@ -660,6 +715,15 @@ func (x *ClientMessage) GetPing() *Ping {
 	return nil
 }
 
+func (x *ClientMessage) GetSignal() *Signal {
+	if x != nil {
+		if x, ok := x.Body.(*ClientMessage_Signal); ok {
+			return x.Signal
+		}
+	}
+	return nil
+}
+
 type isClientMessage_Body interface {
 	isClientMessage_Body()
 }
@@ -680,6 +744,10 @@ type ClientMessage_Ping struct {
 	Ping *Ping `protobuf:"bytes,4,opt,name=ping,proto3,oneof"`
 }
 
+type ClientMessage_Signal struct {
+	Signal *Signal `protobuf:"bytes,5,opt,name=signal,proto3,oneof"`
+}
+
 func (*ClientMessage_Hello) isClientMessage_Body() {}
 
 func (*ClientMessage_MoveTo) isClientMessage_Body() {}
@@ -687,6 +755,8 @@ func (*ClientMessage_MoveTo) isClientMessage_Body() {}
 func (*ClientMessage_MoveDir) isClientMessage_Body() {}
 
 func (*ClientMessage_Ping) isClientMessage_Body() {}
+
+func (*ClientMessage_Signal) isClientMessage_Body() {}
 
 type Welcome struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -703,7 +773,7 @@ type Welcome struct {
 
 func (x *Welcome) Reset() {
 	*x = Welcome{}
-	mi := &file_office_v1_office_proto_msgTypes[8]
+	mi := &file_office_v1_office_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -715,7 +785,7 @@ func (x *Welcome) String() string {
 func (*Welcome) ProtoMessage() {}
 
 func (x *Welcome) ProtoReflect() protoreflect.Message {
-	mi := &file_office_v1_office_proto_msgTypes[8]
+	mi := &file_office_v1_office_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -728,7 +798,7 @@ func (x *Welcome) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Welcome.ProtoReflect.Descriptor instead.
 func (*Welcome) Descriptor() ([]byte, []int) {
-	return file_office_v1_office_proto_rawDescGZIP(), []int{8}
+	return file_office_v1_office_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *Welcome) GetPlayerId() string {
@@ -789,7 +859,7 @@ type PlayerJoined struct {
 
 func (x *PlayerJoined) Reset() {
 	*x = PlayerJoined{}
-	mi := &file_office_v1_office_proto_msgTypes[9]
+	mi := &file_office_v1_office_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -801,7 +871,7 @@ func (x *PlayerJoined) String() string {
 func (*PlayerJoined) ProtoMessage() {}
 
 func (x *PlayerJoined) ProtoReflect() protoreflect.Message {
-	mi := &file_office_v1_office_proto_msgTypes[9]
+	mi := &file_office_v1_office_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -814,7 +884,7 @@ func (x *PlayerJoined) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlayerJoined.ProtoReflect.Descriptor instead.
 func (*PlayerJoined) Descriptor() ([]byte, []int) {
-	return file_office_v1_office_proto_rawDescGZIP(), []int{9}
+	return file_office_v1_office_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *PlayerJoined) GetPlayer() *Player {
@@ -833,7 +903,7 @@ type PlayerLeft struct {
 
 func (x *PlayerLeft) Reset() {
 	*x = PlayerLeft{}
-	mi := &file_office_v1_office_proto_msgTypes[10]
+	mi := &file_office_v1_office_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -845,7 +915,7 @@ func (x *PlayerLeft) String() string {
 func (*PlayerLeft) ProtoMessage() {}
 
 func (x *PlayerLeft) ProtoReflect() protoreflect.Message {
-	mi := &file_office_v1_office_proto_msgTypes[10]
+	mi := &file_office_v1_office_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -858,7 +928,7 @@ func (x *PlayerLeft) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlayerLeft.ProtoReflect.Descriptor instead.
 func (*PlayerLeft) Descriptor() ([]byte, []int) {
-	return file_office_v1_office_proto_rawDescGZIP(), []int{10}
+	return file_office_v1_office_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *PlayerLeft) GetPid() uint32 {
@@ -879,7 +949,7 @@ type Moved struct {
 
 func (x *Moved) Reset() {
 	*x = Moved{}
-	mi := &file_office_v1_office_proto_msgTypes[11]
+	mi := &file_office_v1_office_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -891,7 +961,7 @@ func (x *Moved) String() string {
 func (*Moved) ProtoMessage() {}
 
 func (x *Moved) ProtoReflect() protoreflect.Message {
-	mi := &file_office_v1_office_proto_msgTypes[11]
+	mi := &file_office_v1_office_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -904,7 +974,7 @@ func (x *Moved) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Moved.ProtoReflect.Descriptor instead.
 func (*Moved) Descriptor() ([]byte, []int) {
-	return file_office_v1_office_proto_rawDescGZIP(), []int{11}
+	return file_office_v1_office_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *Moved) GetTick() uint32 {
@@ -932,7 +1002,7 @@ type Sync struct {
 
 func (x *Sync) Reset() {
 	*x = Sync{}
-	mi := &file_office_v1_office_proto_msgTypes[12]
+	mi := &file_office_v1_office_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -944,7 +1014,7 @@ func (x *Sync) String() string {
 func (*Sync) ProtoMessage() {}
 
 func (x *Sync) ProtoReflect() protoreflect.Message {
-	mi := &file_office_v1_office_proto_msgTypes[12]
+	mi := &file_office_v1_office_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -957,7 +1027,7 @@ func (x *Sync) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Sync.ProtoReflect.Descriptor instead.
 func (*Sync) Descriptor() ([]byte, []int) {
-	return file_office_v1_office_proto_rawDescGZIP(), []int{12}
+	return file_office_v1_office_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *Sync) GetTick() uint32 {
@@ -984,7 +1054,7 @@ type Pong struct {
 
 func (x *Pong) Reset() {
 	*x = Pong{}
-	mi := &file_office_v1_office_proto_msgTypes[13]
+	mi := &file_office_v1_office_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -996,7 +1066,7 @@ func (x *Pong) String() string {
 func (*Pong) ProtoMessage() {}
 
 func (x *Pong) ProtoReflect() protoreflect.Message {
-	mi := &file_office_v1_office_proto_msgTypes[13]
+	mi := &file_office_v1_office_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1009,7 +1079,7 @@ func (x *Pong) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Pong.ProtoReflect.Descriptor instead.
 func (*Pong) Descriptor() ([]byte, []int) {
-	return file_office_v1_office_proto_rawDescGZIP(), []int{13}
+	return file_office_v1_office_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *Pong) GetClientTimeMs() int64 {
@@ -1036,7 +1106,7 @@ type Error struct {
 
 func (x *Error) Reset() {
 	*x = Error{}
-	mi := &file_office_v1_office_proto_msgTypes[14]
+	mi := &file_office_v1_office_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1048,7 +1118,7 @@ func (x *Error) String() string {
 func (*Error) ProtoMessage() {}
 
 func (x *Error) ProtoReflect() protoreflect.Message {
-	mi := &file_office_v1_office_proto_msgTypes[14]
+	mi := &file_office_v1_office_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1061,7 +1131,7 @@ func (x *Error) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Error.ProtoReflect.Descriptor instead.
 func (*Error) Descriptor() ([]byte, []int) {
-	return file_office_v1_office_proto_rawDescGZIP(), []int{14}
+	return file_office_v1_office_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *Error) GetCode() ErrorCode {
@@ -1089,6 +1159,7 @@ type ServerMessage struct {
 	//	*ServerMessage_Sync
 	//	*ServerMessage_Pong
 	//	*ServerMessage_Error
+	//	*ServerMessage_Signal
 	Body          isServerMessage_Body `protobuf_oneof:"body"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1096,7 +1167,7 @@ type ServerMessage struct {
 
 func (x *ServerMessage) Reset() {
 	*x = ServerMessage{}
-	mi := &file_office_v1_office_proto_msgTypes[15]
+	mi := &file_office_v1_office_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1108,7 +1179,7 @@ func (x *ServerMessage) String() string {
 func (*ServerMessage) ProtoMessage() {}
 
 func (x *ServerMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_office_v1_office_proto_msgTypes[15]
+	mi := &file_office_v1_office_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1121,7 +1192,7 @@ func (x *ServerMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServerMessage.ProtoReflect.Descriptor instead.
 func (*ServerMessage) Descriptor() ([]byte, []int) {
-	return file_office_v1_office_proto_rawDescGZIP(), []int{15}
+	return file_office_v1_office_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *ServerMessage) GetBody() isServerMessage_Body {
@@ -1194,6 +1265,15 @@ func (x *ServerMessage) GetError() *Error {
 	return nil
 }
 
+func (x *ServerMessage) GetSignal() *Signal {
+	if x != nil {
+		if x, ok := x.Body.(*ServerMessage_Signal); ok {
+			return x.Signal
+		}
+	}
+	return nil
+}
+
 type isServerMessage_Body interface {
 	isServerMessage_Body()
 }
@@ -1226,6 +1306,10 @@ type ServerMessage_Error struct {
 	Error *Error `protobuf:"bytes,7,opt,name=error,proto3,oneof"`
 }
 
+type ServerMessage_Signal struct {
+	Signal *Signal `protobuf:"bytes,8,opt,name=signal,proto3,oneof"`
+}
+
 func (*ServerMessage_Welcome) isServerMessage_Body() {}
 
 func (*ServerMessage_PlayerJoined) isServerMessage_Body() {}
@@ -1239,6 +1323,8 @@ func (*ServerMessage_Sync) isServerMessage_Body() {}
 func (*ServerMessage_Pong) isServerMessage_Body() {}
 
 func (*ServerMessage_Error) isServerMessage_Body() {}
+
+func (*ServerMessage_Signal) isServerMessage_Body() {}
 
 var File_office_v1_office_proto protoreflect.FileDescriptor
 
@@ -1276,12 +1362,16 @@ const file_office_v1_office_proto_rawDesc = "" +
 	"\x02dx\x18\x01 \x01(\x05R\x02dx\x12\x0e\n" +
 	"\x02dy\x18\x02 \x01(\x05R\x02dy\",\n" +
 	"\x04Ping\x12$\n" +
-	"\x0eclient_time_ms\x18\x01 \x01(\x03R\fclientTimeMs\"\xc7\x01\n" +
+	"\x0eclient_time_ms\x18\x01 \x01(\x03R\fclientTimeMs\"4\n" +
+	"\x06Signal\x12\x10\n" +
+	"\x03pid\x18\x01 \x01(\rR\x03pid\x12\x18\n" +
+	"\apayload\x18\x02 \x01(\fR\apayload\"\xf4\x01\n" +
 	"\rClientMessage\x12(\n" +
 	"\x05hello\x18\x01 \x01(\v2\x10.office.v1.HelloH\x00R\x05hello\x12,\n" +
 	"\amove_to\x18\x02 \x01(\v2\x11.office.v1.MoveToH\x00R\x06moveTo\x12/\n" +
 	"\bmove_dir\x18\x03 \x01(\v2\x12.office.v1.MoveDirH\x00R\amoveDir\x12%\n" +
-	"\x04ping\x18\x04 \x01(\v2\x0f.office.v1.PingH\x00R\x04pingB\x06\n" +
+	"\x04ping\x18\x04 \x01(\v2\x0f.office.v1.PingH\x00R\x04ping\x12+\n" +
+	"\x06signal\x18\x05 \x01(\v2\x11.office.v1.SignalH\x00R\x06signalB\x06\n" +
 	"\x04body\"\xd7\x01\n" +
 	"\aWelcome\x12\x1b\n" +
 	"\tplayer_id\x18\x01 \x01(\tR\bplayerId\x12\x12\n" +
@@ -1309,7 +1399,7 @@ const file_office_v1_office_proto_rawDesc = "" +
 	"serverTick\"K\n" +
 	"\x05Error\x12(\n" +
 	"\x04code\x18\x01 \x01(\x0e2\x14.office.v1.ErrorCodeR\x04code\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\xe3\x02\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\x90\x03\n" +
 	"\rServerMessage\x12.\n" +
 	"\awelcome\x18\x01 \x01(\v2\x12.office.v1.WelcomeH\x00R\awelcome\x12>\n" +
 	"\rplayer_joined\x18\x02 \x01(\v2\x17.office.v1.PlayerJoinedH\x00R\fplayerJoined\x128\n" +
@@ -1318,7 +1408,8 @@ const file_office_v1_office_proto_rawDesc = "" +
 	"\x05moved\x18\x04 \x01(\v2\x10.office.v1.MovedH\x00R\x05moved\x12%\n" +
 	"\x04sync\x18\x05 \x01(\v2\x0f.office.v1.SyncH\x00R\x04sync\x12%\n" +
 	"\x04pong\x18\x06 \x01(\v2\x0f.office.v1.PongH\x00R\x04pong\x12(\n" +
-	"\x05error\x18\a \x01(\v2\x10.office.v1.ErrorH\x00R\x05errorB\x06\n" +
+	"\x05error\x18\a \x01(\v2\x10.office.v1.ErrorH\x00R\x05error\x12+\n" +
+	"\x06signal\x18\b \x01(\v2\x11.office.v1.SignalH\x00R\x06signalB\x06\n" +
 	"\x04body*>\n" +
 	"\x06Gender\x12\x0f\n" +
 	"\vGENDER_MALE\x10\x00\x12\x11\n" +
@@ -1345,7 +1436,7 @@ func file_office_v1_office_proto_rawDescGZIP() []byte {
 }
 
 var file_office_v1_office_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_office_v1_office_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_office_v1_office_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_office_v1_office_proto_goTypes = []any{
 	(Gender)(0),           // 0: office.v1.Gender
 	(ErrorCode)(0),        // 1: office.v1.ErrorCode
@@ -1356,15 +1447,16 @@ var file_office_v1_office_proto_goTypes = []any{
 	(*MoveTo)(nil),        // 6: office.v1.MoveTo
 	(*MoveDir)(nil),       // 7: office.v1.MoveDir
 	(*Ping)(nil),          // 8: office.v1.Ping
-	(*ClientMessage)(nil), // 9: office.v1.ClientMessage
-	(*Welcome)(nil),       // 10: office.v1.Welcome
-	(*PlayerJoined)(nil),  // 11: office.v1.PlayerJoined
-	(*PlayerLeft)(nil),    // 12: office.v1.PlayerLeft
-	(*Moved)(nil),         // 13: office.v1.Moved
-	(*Sync)(nil),          // 14: office.v1.Sync
-	(*Pong)(nil),          // 15: office.v1.Pong
-	(*Error)(nil),         // 16: office.v1.Error
-	(*ServerMessage)(nil), // 17: office.v1.ServerMessage
+	(*Signal)(nil),        // 9: office.v1.Signal
+	(*ClientMessage)(nil), // 10: office.v1.ClientMessage
+	(*Welcome)(nil),       // 11: office.v1.Welcome
+	(*PlayerJoined)(nil),  // 12: office.v1.PlayerJoined
+	(*PlayerLeft)(nil),    // 13: office.v1.PlayerLeft
+	(*Moved)(nil),         // 14: office.v1.Moved
+	(*Sync)(nil),          // 15: office.v1.Sync
+	(*Pong)(nil),          // 16: office.v1.Pong
+	(*Error)(nil),         // 17: office.v1.Error
+	(*ServerMessage)(nil), // 18: office.v1.ServerMessage
 }
 var file_office_v1_office_proto_depIdxs = []int32{
 	0,  // 0: office.v1.Profile.gender:type_name -> office.v1.Gender
@@ -1375,23 +1467,25 @@ var file_office_v1_office_proto_depIdxs = []int32{
 	6,  // 5: office.v1.ClientMessage.move_to:type_name -> office.v1.MoveTo
 	7,  // 6: office.v1.ClientMessage.move_dir:type_name -> office.v1.MoveDir
 	8,  // 7: office.v1.ClientMessage.ping:type_name -> office.v1.Ping
-	4,  // 8: office.v1.Welcome.players:type_name -> office.v1.Player
-	4,  // 9: office.v1.PlayerJoined.player:type_name -> office.v1.Player
-	3,  // 10: office.v1.Moved.states:type_name -> office.v1.MoveState
-	3,  // 11: office.v1.Sync.states:type_name -> office.v1.MoveState
-	1,  // 12: office.v1.Error.code:type_name -> office.v1.ErrorCode
-	10, // 13: office.v1.ServerMessage.welcome:type_name -> office.v1.Welcome
-	11, // 14: office.v1.ServerMessage.player_joined:type_name -> office.v1.PlayerJoined
-	12, // 15: office.v1.ServerMessage.player_left:type_name -> office.v1.PlayerLeft
-	13, // 16: office.v1.ServerMessage.moved:type_name -> office.v1.Moved
-	14, // 17: office.v1.ServerMessage.sync:type_name -> office.v1.Sync
-	15, // 18: office.v1.ServerMessage.pong:type_name -> office.v1.Pong
-	16, // 19: office.v1.ServerMessage.error:type_name -> office.v1.Error
-	20, // [20:20] is the sub-list for method output_type
-	20, // [20:20] is the sub-list for method input_type
-	20, // [20:20] is the sub-list for extension type_name
-	20, // [20:20] is the sub-list for extension extendee
-	0,  // [0:20] is the sub-list for field type_name
+	9,  // 8: office.v1.ClientMessage.signal:type_name -> office.v1.Signal
+	4,  // 9: office.v1.Welcome.players:type_name -> office.v1.Player
+	4,  // 10: office.v1.PlayerJoined.player:type_name -> office.v1.Player
+	3,  // 11: office.v1.Moved.states:type_name -> office.v1.MoveState
+	3,  // 12: office.v1.Sync.states:type_name -> office.v1.MoveState
+	1,  // 13: office.v1.Error.code:type_name -> office.v1.ErrorCode
+	11, // 14: office.v1.ServerMessage.welcome:type_name -> office.v1.Welcome
+	12, // 15: office.v1.ServerMessage.player_joined:type_name -> office.v1.PlayerJoined
+	13, // 16: office.v1.ServerMessage.player_left:type_name -> office.v1.PlayerLeft
+	14, // 17: office.v1.ServerMessage.moved:type_name -> office.v1.Moved
+	15, // 18: office.v1.ServerMessage.sync:type_name -> office.v1.Sync
+	16, // 19: office.v1.ServerMessage.pong:type_name -> office.v1.Pong
+	17, // 20: office.v1.ServerMessage.error:type_name -> office.v1.Error
+	9,  // 21: office.v1.ServerMessage.signal:type_name -> office.v1.Signal
+	22, // [22:22] is the sub-list for method output_type
+	22, // [22:22] is the sub-list for method input_type
+	22, // [22:22] is the sub-list for extension type_name
+	22, // [22:22] is the sub-list for extension extendee
+	0,  // [0:22] is the sub-list for field type_name
 }
 
 func init() { file_office_v1_office_proto_init() }
@@ -1399,13 +1493,14 @@ func file_office_v1_office_proto_init() {
 	if File_office_v1_office_proto != nil {
 		return
 	}
-	file_office_v1_office_proto_msgTypes[7].OneofWrappers = []any{
+	file_office_v1_office_proto_msgTypes[8].OneofWrappers = []any{
 		(*ClientMessage_Hello)(nil),
 		(*ClientMessage_MoveTo)(nil),
 		(*ClientMessage_MoveDir)(nil),
 		(*ClientMessage_Ping)(nil),
+		(*ClientMessage_Signal)(nil),
 	}
-	file_office_v1_office_proto_msgTypes[15].OneofWrappers = []any{
+	file_office_v1_office_proto_msgTypes[16].OneofWrappers = []any{
 		(*ServerMessage_Welcome)(nil),
 		(*ServerMessage_PlayerJoined)(nil),
 		(*ServerMessage_PlayerLeft)(nil),
@@ -1413,6 +1508,7 @@ func file_office_v1_office_proto_init() {
 		(*ServerMessage_Sync)(nil),
 		(*ServerMessage_Pong)(nil),
 		(*ServerMessage_Error)(nil),
+		(*ServerMessage_Signal)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1420,7 +1516,7 @@ func file_office_v1_office_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_office_v1_office_proto_rawDesc), len(file_office_v1_office_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   16,
+			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

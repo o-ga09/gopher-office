@@ -27,6 +27,8 @@ const (
 	outBuffer = 256
 	// cmdBuffer はルームへのコマンドキューの長さ。
 	cmdBuffer = 1024
+	// maxSignalPayload は通話のシグナリング 1 通の上限（バイト）。音声のみの SDP は 2KB 前後、映像付きは Chrome で 6KB 前後。
+	maxSignalPayload = 12000
 )
 
 // Config はルームの設定。
@@ -87,6 +89,12 @@ type (
 	inputCmd struct {
 		c   *conn
 		msg *officev1.ClientMessage
+	}
+	// signalCmd は通話のシグナリングの中継依頼。
+	signalCmd struct {
+		from    *conn
+		to      uint32
+		payload []byte
 	}
 )
 
@@ -192,6 +200,10 @@ func (r *Room) handle(cmd any) {
 		if r.players[cmd.c.id] == cmd.c {
 			r.input(cmd.c, cmd.msg)
 		}
+	case signalCmd:
+		if r.players[cmd.from.id] == cmd.from {
+			r.relaySignal(cmd)
+		}
 	}
 }
 
@@ -254,6 +266,24 @@ func (r *Room) input(c *conn, msg *officev1.ClientMessage) {
 		}
 		c.actor.SetDir(dx, dy)
 		c.dirty = true
+	}
+}
+
+// relaySignal は通話のシグナリングを宛先へそのまま届ける。宛先がいない・自分宛て・混んでいるときは捨てる
+// （WebRTC 側がタイムアウトして張り直す。シグナリングで遅い接続を追い出さない）。
+func (r *Room) relaySignal(cmd signalCmd) {
+	if cmd.to == cmd.from.pid {
+		return
+	}
+	for _, o := range r.players {
+		if o.pid != cmd.to {
+			continue
+		}
+		b := r.encode(&officev1.ServerMessage{Body: &officev1.ServerMessage_Signal{
+			Signal: &officev1.Signal{Pid: cmd.from.pid, Payload: cmd.payload},
+		}})
+		r.send(o, b, true)
+		return
 	}
 }
 

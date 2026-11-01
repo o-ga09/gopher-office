@@ -25,7 +25,7 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     mkdir -p /out/web && GOOS=js GOARCH=wasm go build -trimpath -ldflags="-s -w" -o /out/web/game.wasm ./cmd/client \
-    && cp web/index.html "$(go env GOROOT)/lib/wasm/wasm_exec.js" /out/web/
+    && cp web/index.html web/voice.js "$(go env GOROOT)/lib/wasm/wasm_exec.js" /out/web/
 
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab AS gameserver
 COPY --from=build /out/gameserver /gameserver

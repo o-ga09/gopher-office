@@ -11,7 +11,7 @@ import (
 // ProtocolVersion は、クライアントとサーバが話すプロトコルの版。互換性のない変更（proto の意味が変わる変更）の
 // たびに上げる。Hello で照合し、違えばサーバが VERSION_MISMATCH で断る（古いまま動き続ける GameServer と、
 // 新しいクライアントが混ざっても、おかしな表示にならないように）。
-const ProtocolVersion = "2"
+const ProtocolVersion = "3"
 
 // GenderToProto は sim.Gender を proto の Gender に変換する。
 func GenderToProto(g sim.Gender) officev1.Gender {

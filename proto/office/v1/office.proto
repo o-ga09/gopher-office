@@ -76,12 +76,20 @@ message Ping {
   int64 client_time_ms = 1;
 }
 
+// 通話（WebRTC）のシグナリング。SDP / ICE の中身は不透明なバイト列で、サーバは宛先へ中継するだけ。
+// 設計: docs/design.md §11
+message Signal {
+  uint32 pid = 1;      // C→S: 宛先の pid / S→C: 送り主の pid
+  bytes payload = 2;   // JSON（offer / answer / candidate）。最大 12000 バイト
+}
+
 message ClientMessage {
   oneof body {
     Hello hello = 1;
     MoveTo move_to = 2;
     MoveDir move_dir = 3;
     Ping ping = 4;
+    Signal signal = 5;
   }
 }
 
@@ -138,5 +146,6 @@ message ServerMessage {
     Sync sync = 5;
     Pong pong = 6;
     Error error = 7;
+    Signal signal = 8;
   }
 }
