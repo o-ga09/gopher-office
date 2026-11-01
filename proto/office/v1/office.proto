@@ -80,7 +80,7 @@ message Ping {
 // 設計: docs/design.md §11
 message Signal {
   uint32 pid = 1;      // C→S: 宛先の pid / S→C: 送り主の pid
-  bytes payload = 2;   // JSON（offer / answer / candidate）。最大 6000 バイト
+  bytes payload = 2;   // JSON（offer / answer / candidate）。最大 12000 バイト
 }
 
 message ClientMessage {

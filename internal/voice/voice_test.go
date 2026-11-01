@@ -3,6 +3,7 @@ package voice
 import (
 	"errors"
 	"reflect"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -73,6 +74,7 @@ type fakeEngine struct {
 	started  func(error)
 	calls    []string
 	gains    map[uint32]float64
+	camDone  func(error)
 }
 
 func (f *fakeEngine) SetHandler(h Handler) { f.h = h }
@@ -82,6 +84,11 @@ func (f *fakeEngine) Start(done func(error)) {
 	if f.startErr != nil || done == nil {
 		return
 	}
+}
+func (f *fakeEngine) SetLabel(uint32, string) {}
+func (f *fakeEngine) SetCamera(on bool, done func(error)) {
+	f.calls = append(f.calls, map[bool]string{true: "cam-on", false: "cam-off"}[on])
+	f.camDone = done
 }
 func (f *fakeEngine) Stop() { f.calls = append(f.calls, "stop") }
 func (f *fakeEngine) SetMuted(m bool) {
@@ -99,7 +106,7 @@ func (f *fakeEngine) SetGain(pid uint32, g float64) {
 	f.gains[pid] = g
 }
 
-func itoa(v uint32) string { return string(rune('0' + v)) }
+func itoa(v uint32) string { return strconv.FormatUint(uint64(v), 10) }
 
 func newOn(t *testing.T) (*Controller, *fakeEngine, *[][2]any) {
 	t.Helper()
@@ -194,5 +201,42 @@ func TestControllerStopAndMute(t *testing.T) {
 	want := []string{"mute", "connect", "3", "offer", "stop"}
 	if !reflect.DeepEqual(f.calls, want) {
 		t.Fatalf("calls = %v, want %v", f.calls, want)
+	}
+}
+
+func TestControllerCamera(t *testing.T) {
+	c, f, _ := newOn(t)
+	c.ToggleCamera()
+	f.camDone(errors.New("denied"))
+	if on, err := c.Camera(); on || err == nil {
+		t.Fatalf("camera = %v, %v", on, err)
+	}
+	c.ToggleCamera() // やり直せる
+	f.camDone(nil)
+	if on, err := c.Camera(); !on || err != nil {
+		t.Fatalf("camera = %v, %v", on, err)
+	}
+	c.ToggleCamera() // 切る
+	if on, _ := c.Camera(); on {
+		t.Fatal("camera must be off")
+	}
+	c.ToggleCamera()
+	f.camDone(nil)
+	c.Toggle() // 通話を終えるとカメラも切れる
+	if on, _ := c.Camera(); on {
+		t.Fatal("camera must be off after leaving")
+	}
+	want := []string{"cam-on", "cam-on", "cam-off", "cam-on", "stop"}
+	if !reflect.DeepEqual(f.calls, want) {
+		t.Fatalf("calls = %v, want %v", f.calls, want)
+	}
+}
+
+func TestCameraNeedsACall(t *testing.T) {
+	f := &fakeEngine{}
+	c := New(f, nil)
+	c.ToggleCamera()
+	if len(f.calls) != 0 {
+		t.Fatalf("calls = %v", f.calls)
 	}
 }

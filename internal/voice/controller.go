@@ -20,6 +20,10 @@ type Engine interface {
 	Signal(pid uint32, payload []byte)
 	SetGain(pid uint32, gain float64)
 	SetMuted(muted bool)
+	// SetCamera はカメラを入れる／切る。入れるときは許可を待つので、結果は done で返す（別の goroutine から呼んでよい）。
+	SetCamera(on bool, done func(error))
+	// SetLabel は相手の映像の枠に出す名前を設定する。
+	SetLabel(pid uint32, name string)
 	// SetHandler は Engine からの通知の宛先を設定する（Start の前に呼ぶ）。
 	SetHandler(h Handler)
 }
@@ -52,6 +56,8 @@ type Controller struct {
 	state     State
 	err       error
 	muted     bool
+	camera    bool   // カメラが入っている
+	cameraErr error  // 直近のカメラの失敗
 	self      uint32 // 自分の pid（offer を作る側を決めるのに使う）
 	planner   *planner
 	neighbors map[uint32]float64 // 直近の Update で渡された近くの人（pid → 距離）
@@ -127,6 +133,38 @@ func (c *Controller) Toggle() {
 	})
 }
 
+// Camera はカメラが入っているか。失敗したときは理由も返す。
+func (c *Controller) Camera() (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.camera, c.cameraErr
+}
+
+// ToggleCamera はカメラを入れる／切る。通話中だけ使える。映像は音声と同じ相手にだけ届く。
+func (c *Controller) ToggleCamera() {
+	c.mu.Lock()
+	if c.state != On {
+		c.mu.Unlock()
+		return
+	}
+	if c.camera {
+		c.camera = false
+		c.mu.Unlock()
+		c.eng.SetCamera(false, nil)
+		return
+	}
+	c.cameraErr = nil
+	c.mu.Unlock()
+	c.eng.SetCamera(true, func(err error) {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if c.state != On {
+			return
+		}
+		c.camera, c.cameraErr = err == nil, err
+	})
+}
+
 // ToggleMute はマイクのミュートを切り替える。
 func (c *Controller) ToggleMute() {
 	c.mu.Lock()
@@ -149,6 +187,7 @@ func (c *Controller) Close() {
 
 func (c *Controller) stopLocked() {
 	c.eng.Stop()
+	c.camera = false
 	c.state = Off
 	c.planner = newPlanner()
 	c.neighbors = map[uint32]float64{}
@@ -162,8 +201,10 @@ func (c *Controller) Update(ns []Neighbor) {
 		return
 	}
 	c.neighbors = make(map[uint32]float64, len(ns))
+	names := make(map[uint32]string, len(ns))
 	for _, n := range ns {
 		c.neighbors[n.PID] = n.Dist
+		names[n.PID] = n.Name
 	}
 	now := c.now()
 	plan := c.planner.plan(ns, func(pid uint32) bool { return now.Before(c.cooldown[pid]) })
@@ -175,6 +216,7 @@ func (c *Controller) Update(ns []Neighbor) {
 		c.eng.Connect(pid, c.self < pid)
 	}
 	for pid, g := range plan.Gains {
+		c.eng.SetLabel(pid, names[pid])
 		c.eng.SetGain(pid, g)
 	}
 }

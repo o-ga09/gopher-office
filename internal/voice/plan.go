@@ -19,6 +19,7 @@ const (
 // Neighbor は自分から見た他の人。Dist は自分からの距離（タイル）。
 type Neighbor struct {
 	PID  uint32
+	Name string // 映像の枠に出す表示名
 	Dist float64
 }
 

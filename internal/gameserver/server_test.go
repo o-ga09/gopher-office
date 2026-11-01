@@ -303,3 +303,19 @@ func TestOversizedSignalIsRejected(t *testing.T) {
 		t.Fatalf("code = %v", m.GetError().GetCode())
 	}
 }
+
+func TestLargeSignalWithinTheLimitIsRelayed(t *testing.T) {
+	url := startServer(t, Config{MaxPlayers: 10})
+	join := func() (*testClient, uint32) {
+		c := dial(t, url)
+		c.hello("", "x", officev1.Gender_GENDER_OTHER)
+		return c, c.recvUntil(isWelcome).GetWelcome().GetSelfPid()
+	}
+	a, _ := join()
+	b, pb := join()
+	a.send(&officev1.ClientMessage{Body: &officev1.ClientMessage_Signal{Signal: &officev1.Signal{Pid: pb, Payload: make([]byte, maxSignalPayload)}}})
+	got := b.recvUntil(func(m *officev1.ServerMessage) bool { return m.GetSignal() != nil }).GetSignal()
+	if len(got.GetPayload()) != maxSignalPayload {
+		t.Fatalf("payload = %d bytes", len(got.GetPayload()))
+	}
+}

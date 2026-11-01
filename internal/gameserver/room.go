@@ -27,8 +27,8 @@ const (
 	outBuffer = 256
 	// cmdBuffer はルームへのコマンドキューの長さ。
 	cmdBuffer = 1024
-	// maxSignalPayload は通話のシグナリング 1 通の上限（バイト）。音声のみの SDP は 2KB 前後。
-	maxSignalPayload = 6000
+	// maxSignalPayload は通話のシグナリング 1 通の上限（バイト）。音声のみの SDP は 2KB 前後、映像付きは Chrome で 6KB 前後。
+	maxSignalPayload = 12000
 )
 
 // Config はルームの設定。

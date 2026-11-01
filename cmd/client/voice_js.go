@@ -47,7 +47,19 @@ func (w *webVoice) SetHandler(h voice.Handler) {
 	w.api.Set("onpeerclosed", w.onClosed)
 }
 
-func (w *webVoice) Start(done func(error)) {
+func (w *webVoice) Start(done func(error)) { w.promise(w.api.Call("start"), done) }
+
+func (w *webVoice) SetCamera(on bool, done func(error)) {
+	r := w.api.Call("setCamera", on)
+	if done != nil {
+		w.promise(r, done)
+	}
+}
+
+func (w *webVoice) SetLabel(pid uint32, name string) { w.api.Call("setLabel", pid, name) }
+
+// promise は JS の Promise の結果を done で返す（別の goroutine から）。
+func (w *webVoice) promise(p js.Value, done func(error)) {
 	var ok, fail js.Func
 	release := func() { ok.Release(); fail.Release() }
 	ok = js.FuncOf(func(js.Value, []js.Value) any {
@@ -60,7 +72,7 @@ func (w *webVoice) Start(done func(error)) {
 		go done(errors.New(rejectionText(args)))
 		return nil
 	})
-	w.api.Call("start").Call("then", ok, fail)
+	p.Call("then", ok, fail)
 }
 
 // rejectionText は Promise の拒否理由を、利用者に見せる短い文にする。
@@ -69,8 +81,13 @@ func rejectionText(args []js.Value) string {
 		return "unknown error"
 	}
 	e := args[0]
-	if name := e.Get("name"); name.Type() == js.TypeString && name.String() == "NotAllowedError" {
-		return "microphone permission denied"
+	if name := e.Get("name"); name.Type() == js.TypeString {
+		switch name.String() {
+		case "NotAllowedError":
+			return "permission denied"
+		case "NotFoundError":
+			return "no device found"
+		}
 	}
 	if msg := e.Get("message"); msg.Type() == js.TypeString {
 		return msg.String()

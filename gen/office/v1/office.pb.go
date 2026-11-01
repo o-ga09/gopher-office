@@ -579,7 +579,7 @@ func (x *Ping) GetClientTimeMs() int64 {
 type Signal struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Pid           uint32                 `protobuf:"varint,1,opt,name=pid,proto3" json:"pid,omitempty"`        // C→S: 宛先の pid / S→C: 送り主の pid
-	Payload       []byte                 `protobuf:"bytes,2,opt,name=payload,proto3" json:"payload,omitempty"` // JSON（offer / answer / candidate）。最大 6000 バイト
+	Payload       []byte                 `protobuf:"bytes,2,opt,name=payload,proto3" json:"payload,omitempty"` // JSON（offer / answer / candidate）。最大 12000 バイト
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

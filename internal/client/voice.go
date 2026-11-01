@@ -43,7 +43,7 @@ func (g *Game) closeVoice() {
 	}
 }
 
-// updateVoiceKeys は V（通話の開始・終了）と M（ミュート）を処理する。
+// updateVoiceKeys は V（通話の開始・終了）、M（ミュート）、C（カメラ）を処理する。
 // 通話は、利用者が V を押したときだけ始まる（マイクの許可を求める）。
 func (g *Game) updateVoiceKeys() {
 	if g.voice == nil {
@@ -57,6 +57,9 @@ func (g *Game) updateVoiceKeys() {
 	}
 	if inpututil.IsKeyJustPressed(ebiten.KeyM) {
 		g.voice.ToggleMute()
+	}
+	if inpututil.IsKeyJustPressed(ebiten.KeyC) {
+		g.voice.ToggleCamera()
 	}
 }
 
@@ -85,7 +88,7 @@ func neighbors(w *netcode.World) []voice.Neighbor {
 		}
 		dx := float64(p.Actor.X-self.Actor.X) / sim.SubPerTile
 		dy := float64(p.Actor.Y-self.Actor.Y) / sim.SubPerTile
-		out = append(out, voice.Neighbor{PID: p.PID, Dist: math.Hypot(dx, dy)})
+		out = append(out, voice.Neighbor{PID: p.PID, Name: p.Name, Dist: math.Hypot(dx, dy)})
 	}
 	return out
 }
@@ -100,9 +103,18 @@ func (g *Game) voiceHUD() string {
 	case voice.Starting:
 		return "   Voice: allow the microphone..."
 	case voice.On:
-		s := "   Voice ON (V: leave, M: mute)"
+		s := "   Voice ON (V: leave, M: mute"
 		if g.voice.Muted() {
-			s = "   Voice ON - muted (V: leave, M: unmute)"
+			s = "   Voice ON - muted (V: leave, M: unmute"
+		}
+		cam, err := g.voice.Camera()
+		switch {
+		case cam:
+			s += ", C: camera off)"
+		case err != nil:
+			s += ", C: camera failed: " + err.Error() + ")"
+		default:
+			s += ", C: camera)"
 		}
 		return s
 	case voice.Failed:

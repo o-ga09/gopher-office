@@ -19,7 +19,7 @@ const (
 	helloTimeout = 10 * time.Second
 	writeTimeout = 5 * time.Second
 	// maxFrameBytes はクライアントからの 1 フレームの上限。入力メッセージは数十バイトしかない。
-	maxFrameBytes = 8 << 10
+	maxFrameBytes = 16 << 10
 	// 受信メッセージのレート制限（1 接続あたり）。移動入力は数 Hz なので十分な余裕がある。
 	rateLimitPerSec = 60
 	rateBurst       = 120
