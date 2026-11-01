@@ -2,4 +2,5 @@
 *.wasm
 /bin/
 web/wasm_exec.js
-web/wasm_exec.js
+# 開発用の秘密鍵・DSN（make dev-env が作る）。コミットしない
+.env.dev

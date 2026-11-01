@@ -16,6 +16,7 @@ import (
 	"time"
 
 	officev1 "github.com/o-ga09/gopher-office/gen/office/v1"
+	"github.com/o-ga09/gopher-office/internal/apiclient"
 	"github.com/o-ga09/gopher-office/internal/netcode"
 	"github.com/o-ga09/gopher-office/internal/sim"
 )
@@ -33,6 +34,8 @@ func main() {
 	var (
 		server   = flag.String("server", "ws://localhost:7654/room", "GameServer の WebSocket URL")
 		token    = flag.String("token", "", "roomToken（-local のサーバでは不要）")
+		apiBase  = flag.String("api", "", "API のベース URL（指定すると、各 bot がゲスト登録して招待コードで入室する）")
+		invite   = flag.String("invite", "", "招待コード（-api と組み合わせる）")
 		n        = flag.Int("n", 50, "bot の数")
 		ramp     = flag.Duration("ramp", 5*time.Second, "全員を接続し終えるまでの時間（一斉接続を避ける）")
 		duration = flag.Duration("duration", 0, "この時間が経ったら終了する。0 なら Ctrl-C まで")
@@ -43,6 +46,9 @@ func main() {
 	flag.Parse()
 	if *n <= 0 || *maxWait < *minWait {
 		log.Fatal("invalid flags: need n > 0 and max-wait >= min-wait")
+	}
+	if (*apiBase == "") != (*invite == "") {
+		log.Fatal("-api and -invite must be specified together")
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -69,21 +75,42 @@ func main() {
 			case <-ctx.Done():
 				return
 			}
-			runBot(ctx, i, *server, *token, tiles, rand.New(rand.NewPCG(*seed, uint64(i))), *minWait, *maxWait, &st) //nolint:gosec // bot の動きに暗号論的な乱数は不要
+			runBot(ctx, i, target{server: *server, token: *token, api: *apiBase, invite: *invite}, tiles, rand.New(rand.NewPCG(*seed, uint64(i))), *minWait, *maxWait, &st) //nolint:gosec // bot の動きに暗号論的な乱数は不要
 		}(i)
 	}
 	wg.Wait()
 	fmt.Printf("done: connected=%d failed=%d messages=%d errors=%d\n", st.connected.Load(), st.failed.Load(), st.messages.Load(), st.errors.Load())
 }
 
-func runBot(ctx context.Context, i int, url, token string, tiles []sim.Point, rng *rand.Rand, minWait, maxWait time.Duration, st *stats) {
-	dctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+// target は bot のつなぎ先。api と invite があれば API 経由で入室し、無ければ server に直接つなぐ。
+type target struct {
+	server, token string
+	api, invite   string
+}
+
+func runBot(ctx context.Context, i int, tg target, tiles []sim.Point, rng *rand.Rand, minWait, maxWait time.Duration, st *stats) {
+	dctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	name, gender := fmt.Sprintf("bot-%03d", i), uint8(i%3) //nolint:gosec // 0〜2 の値
+
+	url, token := tg.server, tg.token
+	if tg.api != "" {
+		cl := apiclient.New(tg.api)
+		if _, err := cl.CreateGuest(dctx, name, gender); err != nil {
+			cancel()
+			st.failed.Add(1)
+			return
+		}
+		j, err := cl.Join(dctx, tg.invite)
+		if err != nil {
+			cancel()
+			st.failed.Add(1)
+			return
+		}
+		url, token = j.ServerURL, j.RoomToken
+	}
 	c, err := netcode.Dial(dctx, url, &officev1.Hello{
 		RoomToken: token,
-		Profile: &officev1.Profile{
-			DisplayName: fmt.Sprintf("bot-%03d", i),
-			Gender:      officev1.Gender(i % 3), //nolint:gosec // 0〜2 の値
-		},
+		Profile:   &officev1.Profile{DisplayName: name, Gender: officev1.Gender(gender)},
 	})
 	cancel()
 	if err != nil {
