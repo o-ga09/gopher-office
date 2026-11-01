@@ -468,6 +468,7 @@ v0 は MySQL の BLOB（64×64 PNG は数 KB）。P6 でオブジェクトスト
 
 - **抽象化**: `internal/blob` の `blob.Store` インターフェース。実装は `dir`（ローカルのディレクトリ。開発用）と `s3blob`（S3 互換）。キーは内容アドレスで `icons/<hash>.png`
 - **API のフラグ**: `-icon-store=none|dir|s3`（既定 `none` ＝ 従来どおり DB のみ）、`-icon-dir`。`s3` は環境変数 `S3_ENDPOINT` / `S3_BUCKET` / `S3_REGION` / `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` で設定する
+- **本番の置き場所は Cloudflare R2**: `S3_ENDPOINT=https://<アカウントID>.r2.cloudflarestorage.com`、`S3_REGION=auto`、バケットは非公開（配信は API が代わりに行う）。インフラ側の設定は o-ga09/infra の `manifests/gopher-office/`
 - **移行は 3 段階**で、本番を止めずに進める
   - **段階 A（実装済み）**: 書き込みは blob と `player_icons.data` の二重書き（blob → DB の順。内容アドレスなので、blob だけ書けて DB が失敗しても無害）。読み込みは blob 優先で、無ければ DB にフォールバックする
   - **段階 B（実装済み）**: `cmd/iconmigrate`（`-icon-store=dir|s3`、`-dry-run`）が既存の `player_icons.data` を blob へコピーする。`sha256(data)` が `hash` と一致する行だけを移し、冪等なので何度でも実行できる
