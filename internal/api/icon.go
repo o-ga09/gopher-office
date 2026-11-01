@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/labstack/echo/v5"
 
+	"github.com/o-ga09/gopher-office/internal/blob"
 	"github.com/o-ga09/gopher-office/internal/icon"
 )
 
@@ -43,6 +45,12 @@ func (h *handler) putIcon(c *echo.Context) error {
 		return err
 	}
 
+	// blob → DB の順に書く。blob だけ書けて DB が失敗しても、内容アドレスなので無害（次の PUT で同じキーに冪等に上書き）
+	if h.cfg.Blobs != nil {
+		if err := h.cfg.Blobs.Put(c.Request().Context(), IconBlobKey(hash), pngData, "image/png"); err != nil {
+			return err
+		}
+	}
 	p, err := h.cfg.Store.SetIcon(c.Request().Context(), playerID(c), hash, pngData)
 	if errors.Is(err, ErrNotFound) {
 		return errUnauthorized
@@ -60,14 +68,14 @@ func (h *handler) getIcon(c *echo.Context) error {
 	if len(id) != 26 || !isAlnum(id) {
 		return errNotFound
 	}
-	hash, data, err := h.cfg.Store.GetIcon(c.Request().Context(), id)
+	ctx := c.Request().Context()
+	hash, err := h.cfg.Store.GetIconHash(ctx, id)
 	if errors.Is(err, ErrNotFound) {
 		return errNotFound
 	}
 	if err != nil {
 		return err
 	}
-
 	etag := `"` + hash + `"`
 	hd := c.Response().Header()
 	hd.Set("ETag", etag)
@@ -77,11 +85,37 @@ func (h *handler) getIcon(c *echo.Context) error {
 	} else {
 		hd.Set("Cache-Control", cacheRevalidate)
 	}
+	// ハッシュは内容アドレスなので、一致すれば本体を読まずに 304 を返せる
 	if etagMatches(c.Request().Header.Get("If-None-Match"), etag) {
 		return c.NoContent(http.StatusNotModified)
 	}
+
+	data, err := h.iconData(ctx, hash)
+	if errors.Is(err, ErrNotFound) {
+		return errNotFound
+	}
+	if err != nil {
+		return err
+	}
 	return c.Blob(http.StatusOK, "image/png", data)
 }
+
+// iconData は画像の本体を返す。blob を先に見て、無ければ旧 data（player_icons）から読む。
+func (h *handler) iconData(ctx context.Context, hash string) ([]byte, error) {
+	if h.cfg.Blobs != nil {
+		data, err := h.cfg.Blobs.Get(ctx, IconBlobKey(hash))
+		if err == nil {
+			return data, nil
+		}
+		if !errors.Is(err, blob.ErrNotFound) {
+			return nil, err
+		}
+	}
+	return h.cfg.Store.LegacyIconData(ctx, hash)
+}
+
+// IconBlobKey はアイコン画像の blob のキー。
+func IconBlobKey(hash string) string { return "icons/" + hash + ".png" }
 
 func etagMatches(header, etag string) bool {
 	for _, t := range strings.Split(header, ",") {

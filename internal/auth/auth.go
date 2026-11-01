@@ -84,28 +84,54 @@ func (s *Signer) parser(audience string) *jwt.Parser {
 	)
 }
 
-// IssuePlayerToken は API の認証に使う playerToken を発行する。
+// PlayerClaims は playerToken の中身。
+type PlayerClaims struct {
+	PlayerID string
+	// Version は token_version。パスワード変更で上がり、古いトークンを失効させる。ver の無いトークンは 0。
+	Version uint32
+}
+
+type playerClaims struct {
+	Ver uint32 `json:"ver,omitempty"`
+	jwt.RegisteredClaims
+}
+
+// IssuePlayerToken は API の認証に使う playerToken（version 0）を発行する。
 func (s *Signer) IssuePlayerToken(playerID string) (string, error) {
+	return s.IssuePlayerTokenV(playerID, 0)
+}
+
+// IssuePlayerTokenV は token_version つきの playerToken を発行する。
+func (s *Signer) IssuePlayerTokenV(playerID string, ver uint32) (string, error) {
 	now := s.now()
-	return jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
-		Issuer:    issuer,
-		Subject:   playerID,
-		Audience:  jwt.ClaimStrings{audiencePlayer},
-		IssuedAt:  jwt.NewNumericDate(now),
-		ExpiresAt: jwt.NewNumericDate(now.Add(PlayerTokenTTL)),
+	return jwt.NewWithClaims(jwt.SigningMethodHS256, playerClaims{
+		Ver: ver,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    issuer,
+			Subject:   playerID,
+			Audience:  jwt.ClaimStrings{audiencePlayer},
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(PlayerTokenTTL)),
+		},
 	}).SignedString(s.playerKey)
 }
 
-// ParsePlayerToken は playerToken を検証し、プレイヤー ID を返す。
+// ParsePlayerToken は playerToken を検証し、プレイヤー ID を返す（version は見ない）。
 func (s *Signer) ParsePlayerToken(token string) (string, error) {
-	var claims jwt.RegisteredClaims
+	c, err := s.ParsePlayerTokenClaims(token)
+	return c.PlayerID, err
+}
+
+// ParsePlayerTokenClaims は playerToken を検証し、プレイヤー ID と version を返す。
+func (s *Signer) ParsePlayerTokenClaims(token string) (PlayerClaims, error) {
+	var claims playerClaims
 	if _, err := s.parser(audiencePlayer).ParseWithClaims(token, &claims, func(*jwt.Token) (any, error) { return s.playerKey, nil }); err != nil {
-		return "", fmt.Errorf("%w: %w", ErrInvalidToken, err)
+		return PlayerClaims{}, fmt.Errorf("%w: %w", ErrInvalidToken, err)
 	}
 	if claims.Subject == "" {
-		return "", fmt.Errorf("%w: no subject", ErrInvalidToken)
+		return PlayerClaims{}, fmt.Errorf("%w: no subject", ErrInvalidToken)
 	}
-	return claims.Subject, nil
+	return PlayerClaims{PlayerID: claims.Subject, Version: claims.Ver}, nil
 }
 
 // IssueRoomToken は GameServer への入室に使う roomToken を発行する。

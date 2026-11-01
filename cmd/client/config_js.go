@@ -15,6 +15,7 @@ const tokenKey = "gopher-office.player-token"
 
 // loadConfig はページの URL から設定を読む（ブラウザ版）。
 //
+//	/home                       ホーム（ワークスペース一覧・サインイン）。招待コードなしで始まる
 //	/w/{招待コード}              招待 URL。API でゲスト登録・入室し、返された GameServer につなぐ
 //	?api=http://localhost:8080  API のベース URL（既定は同じオリジン）
 //	?online=1                   API を通さず、同じオリジンの /room に直接つなぐ（開発用）
@@ -31,8 +32,12 @@ func loadConfig() client.Config {
 	origin := u.Scheme + "://" + u.Host
 	cfg := client.Config{ServerURL: q.Get("server"), Name: q.Get("name")}
 
-	if code, ok := strings.CutPrefix(u.Path, "/w/"); ok && code != "" {
+	home := strings.TrimRight(u.Path, "/") == "/home"
+	code, isInvite := strings.CutPrefix(u.Path, "/w/")
+	if home || (isInvite && code != "") {
 		cfg.InviteCode = strings.Trim(code, "/")
+		cfg.Home = home
+		cfg.Navigator = historyNavigator{}
 		cfg.APIBase = origin
 		if api := q.Get("api"); api != "" {
 			cfg.APIBase = api
@@ -73,3 +78,17 @@ func (localStorageTokens) Save(token string) {
 	defer func() { _ = recover() }()
 	js.Global().Get("localStorage").Call("setItem", tokenKey, token)
 }
+
+// historyNavigator は History API でページを再読み込みせずに URL を書き換える。
+type historyNavigator struct{}
+
+func (historyNavigator) Push(path string) { change("pushState", path) }
+
+// change は pushState / replaceState を呼ぶ。履歴が使えない環境では何もしない。
+func change(method, path string) {
+	defer func() { _ = recover() }()
+	js.Global().Get("history").Call(method, nil, "", path)
+}
+
+// Replace は履歴を増やさずに URL を書き換える。
+func (historyNavigator) Replace(path string) { change("replaceState", path) }

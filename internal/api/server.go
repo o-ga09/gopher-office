@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"reflect"
@@ -14,7 +15,8 @@ import (
 	"github.com/labstack/echo/v5/middleware"
 
 	"github.com/o-ga09/gopher-office/internal/auth"
-	"github.com/o-ga09/gopher-office/internal/icon"
+	"github.com/o-ga09/gopher-office/internal/blob"
+	"github.com/o-ga09/gopher-office/internal/password"
 )
 
 const (
@@ -22,19 +24,26 @@ const (
 	maxBodyBytes = 8 << 10
 
 	defaultMaxWorkspacesPerPlayer = 5
+	defaultMaxRoomsPerWorkspace   = 5
 	defaultGuestPerMinute         = 20
 	defaultActionPerMinute        = 60
 )
 
 // Config は API サーバの設定。
 type Config struct {
-	Store     Store
+	Store Store
+	// Accounts は永続アカウント（メール + パスワード）の永続化。nil ならアカウントのルートを登録しない。
+	Accounts  AccountStore
 	Signer    *auth.Signer
 	Allocator RoomAllocator
 	Logger    *slog.Logger
+	// Blobs はアイコン画像の置き場。nil なら従来どおり DB（player_icons.data）だけを使う。
+	Blobs blob.Store
 
 	// MaxWorkspacesPerPlayer は 1 人が作れるワークスペースの数。0 なら既定値。
 	MaxWorkspacesPerPlayer int
+	// MaxRoomsPerWorkspace は 1 つのワークスペースに作れるルームの数。0 なら既定値。
+	MaxRoomsPerWorkspace int
 	// GuestPerMinute は IP ごとに、ゲストを作れる回数（分あたり）。0 なら既定値。
 	GuestPerMinute int
 	// ActionPerMinute はプレイヤーごとに、ワークスペースの作成・入室ができる回数（分あたり）。0 なら既定値。
@@ -50,6 +59,8 @@ type Config struct {
 type handler struct {
 	cfg Config
 	log *slog.Logger
+	// dummyHash は存在しないメールのログインで、ダミーの検証に使う argon2id ハッシュ（NewServer で作る）
+	dummyHash string
 }
 
 // NewServer は API の http.Handler を作る。
@@ -68,6 +79,9 @@ func NewServer(cfg Config) (*echo.Echo, error) {
 	if cfg.MaxWorkspacesPerPlayer <= 0 {
 		cfg.MaxWorkspacesPerPlayer = defaultMaxWorkspacesPerPlayer
 	}
+	if cfg.MaxRoomsPerWorkspace <= 0 {
+		cfg.MaxRoomsPerWorkspace = defaultMaxRoomsPerWorkspace
+	}
 	if cfg.GuestPerMinute <= 0 {
 		cfg.GuestPerMinute = defaultGuestPerMinute
 	}
@@ -75,6 +89,14 @@ func NewServer(cfg Config) (*echo.Echo, error) {
 		cfg.ActionPerMinute = defaultActionPerMinute
 	}
 	h := &handler{cfg: cfg, log: cfg.Logger}
+	if cfg.Accounts != nil {
+		// 存在しないメールのログインで、応答時間の差からメールの有無が漏れないよう、起動時にダミーのハッシュを作っておく
+		dummy, err := password.HashPassword("dummy-password-for-timing")
+		if err != nil {
+			return nil, fmt.Errorf("api: dummy password hash: %w", err)
+		}
+		h.dummyHash = dummy
+	}
 
 	e := echo.New()
 	e.Logger = cfg.Logger
@@ -104,17 +126,10 @@ func NewServer(cfg Config) (*echo.Echo, error) {
 	e.GET("/healthz", h.healthz)
 
 	v1 := e.Group("/v1")
-	v1.POST("/guest", h.createGuest, ipLimiter(cfg.GuestPerMinute))
-	v1.GET("/workspaces/by-code/:code", h.getWorkspaceByCode)
-	v1.GET("/players/:id/icon", h.getIcon)
-
-	// 認証はルートごとに付ける。グループに付けると、存在しないパスにも認証が掛かり、404 が 401 になる
 	limit := playerLimiter(cfg.ActionPerMinute)
-	v1.GET("/me", h.getMe, h.requireAuth)
-	v1.PATCH("/me", h.updateMe, h.requireAuth)
-	v1.PUT("/me/icon", h.putIcon, h.requireAuth, limit, middleware.BodyLimit(icon.MaxUploadBytes))
-	v1.POST("/workspaces", h.createWorkspace, h.requireAuth, limit)
-	v1.POST("/workspaces/:code/join", h.joinWorkspace, h.requireAuth, limit)
+	h.routesPlayer(v1, ipLimiter(cfg.GuestPerMinute), limit)
+	h.routesWorkspace(v1, limit)
+	h.routesAccount(v1)
 
 	return e, nil
 }

@@ -329,12 +329,17 @@ sequenceDiagram
 |---|---|---|
 | `POST` | `/v1/guest` | ゲスト作成（表示名・性別）。`playerToken`（HS256、30 日）を返す |
 | `PATCH` | `/v1/me` | 表示名・性別を変更 |
-| `GET` | `/v1/me` | 自分のプロフィール |
+| `GET` | `/v1/me` | 自分のプロフィールと `account`（メール登録済みなら `{email}`） |
+| `POST` | `/v1/me/credentials` | ゲストにメールとパスワードを設定する（昇格。`player_id` は変わらない）。新しい `player_token` を返す |
+| `POST` | `/v1/login` | メールとパスワードでログイン。失敗は理由を区別せず 401 `invalid_credentials`。IP ごとに 10 回/分 |
+| `PUT` | `/v1/me/password` | パスワード変更。`token_version` を上げ、古い playerToken を失効させて新しいトークンを返す |
+| `GET` | `/v1/me/workspaces` | 自分が参加しているワークスペースの一覧（役割・最終入室時刻つき。最大 50 件） |
 | `PUT` | `/v1/me/icon` | アイコン画像のアップロード（[§8](#8-プロフィールとアイコン画像)） |
 | `GET` | `/v1/players/{id}/icon` | アイコン画像の取得（キャッシュ可） |
 | `POST` | `/v1/workspaces` | ワークスペース作成。`inviteCode` を返す |
 | `GET` | `/v1/workspaces/by-code/{code}` | 招待コードからワークスペース情報を取得 |
-| `POST` | `/v1/workspaces/{code}/join` | 入室。`roomToken` を返す（必要なら GameServer を割り当てる） |
+| `POST` | `/v1/workspaces/{code}/join` | 入室。`roomToken` を返す（必要なら GameServer を割り当てる）。ボディは任意で、`room_id` を指定するとそのルームに入る（省略時は最初のルーム。別ワークスペースのルームは 404） |
+| `POST` | `/v1/workspaces/{code}/rooms` | ルームの追加（オーナーのみ。上限超過は 409 `room_limit`） |
 | `POST` | `/internal/rooms/{id}/closed` | GameServer からの閉鎖通知（内部トークン認証、Ingress には出さない） |
 | `GET` | `/healthz` | ヘルスチェック |
 
@@ -376,6 +381,33 @@ CREATE TABLE rooms (
 ```
 
 v0 では「ワークスペース作成時にルームを 1 つ自動作成」する（同じトランザクションで作る）。`player_icons`（`0002_player_icons.sql`）は P2c で追加した。
+
+P6 で次を追加した（`0003_accounts.sql`、`0004_workspace_members.sql`）。
+
+```sql
+-- 永続アカウント。ゲストが昇格すると行ができる（player_id は変わらない）
+CREATE TABLE player_credentials (
+  player_id     CHAR(26)     PRIMARY KEY REFERENCES players (id),
+  email         VARCHAR(254) NOT NULL UNIQUE,   -- trim + 小文字化して保存（utf8mb4_bin）
+  password_hash VARCHAR(255) NOT NULL,          -- argon2id（PHC 形式）
+  created_at    DATETIME(3)  NOT NULL,
+  updated_at    DATETIME(3)  NOT NULL
+);
+ALTER TABLE players ADD COLUMN token_version INT UNSIGNED NOT NULL DEFAULT 0;  -- playerToken の失効用
+
+-- 参加者（オーナーを含む）。「自分のワークスペース」の一覧に使う。既存のオーナーは移行時に埋める
+CREATE TABLE workspace_members (
+  workspace_id    CHAR(26) REFERENCES workspaces (id),
+  player_id       CHAR(26) REFERENCES players (id),
+  role            TINYINT NOT NULL,             -- 0=member 1=owner
+  first_joined_at DATETIME(3) NOT NULL,
+  last_joined_at  DATETIME(3) NOT NULL,         -- 入室のたびに更新
+  PRIMARY KEY (workspace_id, player_id)
+);
+```
+
+- **トークンの失効**: playerToken に `token_version` を載せ、`players.token_version` と一致しないものは拒否する。パスワード変更で上げる
+- **パスワード**: argon2id。ハッシュ計算は同時 4 つまでに絞る（1 回で約 19 MiB 使うため）。存在しないメールでもダミーのハッシュ検証をして、応答時間でメールの有無が分からないようにする
 
 ### Redis
 
@@ -430,7 +462,16 @@ v0 では「ワークスペース作成時にルームを 1 つ自動作成」�
 
 ### ストレージ
 
-v0 は MySQL の BLOB（64×64 PNG は数 KB）。件数が増えたら S3 互換ストレージ（MinIO 等）に移す。
+v0 は MySQL の BLOB（64×64 PNG は数 KB）。P6 でオブジェクトストレージに移せるようにした。
+
+### オブジェクトストレージ化（P6）
+
+- **抽象化**: `internal/blob` の `blob.Store` インターフェース。実装は `dir`（ローカルのディレクトリ。開発用）と `s3blob`（S3 互換）。キーは内容アドレスで `icons/<hash>.png`
+- **API のフラグ**: `-icon-store=none|dir|s3`（既定 `none` ＝ 従来どおり DB のみ）、`-icon-dir`。`s3` は環境変数 `S3_ENDPOINT` / `S3_BUCKET` / `S3_REGION` / `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` で設定する
+- **移行は 3 段階**で、本番を止めずに進める
+  - **段階 A（実装済み）**: 書き込みは blob と `player_icons.data` の二重書き（blob → DB の順。内容アドレスなので、blob だけ書けて DB が失敗しても無害）。読み込みは blob 優先で、無ければ DB にフォールバックする
+  - **段階 B（実装済み）**: `cmd/iconmigrate`（`-icon-store=dir|s3`、`-dry-run`）が既存の `player_icons.data` を blob へコピーする。`sha256(data)` が `hash` と一致する行だけを移し、冪等なので何度でも実行できる
+  - **段階 C（本番移行後）**: `0005`（`data` を NULL 許容にして書き込みを止める）、`0006`（`data` 列の削除）。全件が blob にあることを確認してから行う。まだ追加していない
 
 ### 表示名の描画
 
@@ -466,6 +507,13 @@ Gopher は Renée French さんのデザインで、**CC BY 3.0** ライセン�
 - 描画は **最後（最前面）** に行い、アバターや UI に隠れないようにする。視認性のため半透明の背景を付けてもよい（透明度の調整は可、非表示は不可）
 - LT のスライドにも同様に、スライドの中央に表記する
 - 受け入れ条件: スクリーンショット（入室前・入室後・全員が密集した状態）のすべてで、読める状態で中央にクレジットが見えること
+
+### 9.3.1 ホーム・ルーム切替・アカウント（P6）
+
+- **`/home`**: 招待コードなしで開くとホーム（プロフィール画面）から始まる。「My workspaces」で参加中のワークスペース一覧（`GET /v1/me/workspaces`）を出し、選ぶと入室する。「Sign in」でログインできる
+- **ルーム切替**: 入室中に `R` キーでルーム一覧のオーバーレイを開く（`Esc` / `R` で閉じる）。ルームを選ぶと `join` に `room_id` を付けて入り直す。オーナーはここからルームを追加できる。プロフィール画面でも入るルームを選べる
+- **アカウント画面**: ゲストをメール + パスワードで昇格（`POST /v1/me/credentials`）、ログイン、パスワード変更ができる。画面の文言は英語のみ（同梱フォントが日本語を持たないため）
+- **割り切り**: パスワード復旧（リセット）は無い。ログイン時に既存のゲストを統合する機能も無い（ログインすると別のプレイヤーとして入り直す）。ローカル（`-local` の GameServer）は、どのルームを選んでも同じ GameServer につながる（`StaticAllocator`）
 
 ### 9.4 WASM 固有の注意
 
