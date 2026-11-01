@@ -142,21 +142,55 @@ func (c *Client) Join(ctx context.Context, code string) (JoinResult, error) {
 	return out, err
 }
 
+// UploadIcon はアイコン画像（PNG / JPEG / WebP のバイト列）をアップロードし、更新後のプロフィールを返す。
+func (c *Client) UploadIcon(ctx context.Context, image []byte) (Player, error) {
+	var out struct {
+		Player Player `json:"player"`
+	}
+	data, err := c.send(ctx, http.MethodPut, "/v1/me/icon", "application/octet-stream", image)
+	if err != nil {
+		return Player{}, err
+	}
+	err = json.Unmarshal(data, &out)
+	return out.Player, err
+}
+
+// Icon はプレイヤーのアイコン画像（64x64 の PNG）を取得する。hash はそのプレイヤーの icon_hash で、
+// URL に付けることで、CDN やブラウザが長くキャッシュできる。認証は不要。
+func (c *Client) Icon(ctx context.Context, playerID, hash string) ([]byte, error) {
+	return c.send(ctx, http.MethodGet, "/v1/players/"+url.PathEscape(playerID)+"/icon?h="+url.QueryEscape(hash), "", nil)
+}
+
+// do は JSON のリクエストを送り、JSON のレスポンスを out に読み込む。
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
-	var rd io.Reader
+	var raw []byte
+	contentType := ""
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
 			return err
 		}
-		rd = bytes.NewReader(b)
+		raw, contentType = b, "application/json"
+	}
+	data, err := c.send(ctx, method, path, contentType, raw)
+	if err != nil || out == nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// send はリクエストを送り、レスポンスのボディを返す。4xx/5xx は *Error にする。
+func (c *Client) send(ctx context.Context, method, path, contentType string, body []byte) ([]byte, error) {
+	var rd io.Reader
+	if body != nil {
+		rd = bytes.NewReader(body)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.base+path, rd)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
 	}
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
@@ -164,12 +198,12 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if resp.StatusCode >= 400 {
@@ -180,10 +214,7 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 			} `json:"error"`
 		}
 		_ = json.Unmarshal(data, &e) // JSON でないエラー（プロキシの 502 など）でも、ステータスは返す
-		return &Error{Status: resp.StatusCode, Code: e.Error.Code, Message: e.Error.Message}
+		return nil, &Error{Status: resp.StatusCode, Code: e.Error.Code, Message: e.Error.Message}
 	}
-	if out == nil {
-		return nil
-	}
-	return json.Unmarshal(data, out)
+	return data, nil
 }

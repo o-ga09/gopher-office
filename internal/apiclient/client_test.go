@@ -1,7 +1,10 @@
 package apiclient_test
 
 import (
+	"bytes"
 	"context"
+	"image"
+	"image/png"
 	"io"
 	"log/slog"
 	"net/http"
@@ -119,5 +122,42 @@ func TestClientHandlesNonJSONErrors(t *testing.T) {
 	ae, ok := err.(*apiclient.Error) //nolint:errorlint // 型を直接確認する
 	if !ok || ae.Status != http.StatusBadGateway {
 		t.Fatalf("err = %#v", err)
+	}
+}
+
+func TestClientIcon(t *testing.T) {
+	ctx := context.Background()
+	c := startAPI(t)
+	p, err := c.CreateGuest(ctx, "iconic", 1)
+	if err != nil || p.IconHash != nil {
+		t.Fatalf("player=%+v err=%v", p, err)
+	}
+
+	var src bytes.Buffer
+	img := image.NewNRGBA(image.Rect(0, 0, 200, 100))
+	for i := range img.Pix {
+		img.Pix[i] = 0xff
+	}
+	if err := png.Encode(&src, img); err != nil {
+		t.Fatal(err)
+	}
+	up, err := c.UploadIcon(ctx, src.Bytes())
+	if err != nil || up.IconHash == nil {
+		t.Fatalf("upload: %+v err=%v", up, err)
+	}
+
+	data, err := c.Icon(ctx, p.ID, *up.IconHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := png.Decode(bytes.NewReader(data)); err != nil || got.Bounds().Dx() != 64 {
+		t.Fatalf("icon: %v %v", got, err)
+	}
+
+	if _, err := c.UploadIcon(ctx, []byte("not an image")); !apiclient.IsCode(err, "unsupported_image") {
+		t.Fatalf("err = %v", err)
+	}
+	if _, err := c.Icon(ctx, "01ARZ3NDEKTSV4RRFFQ69G5FAV", *up.IconHash); !apiclient.IsCode(err, "not_found") {
+		t.Fatalf("err = %v", err)
 	}
 }

@@ -2,6 +2,7 @@ package client
 
 import (
 	"bytes"
+	"image"
 	"image/color"
 	"log"
 
@@ -45,16 +46,26 @@ func drawText(dst *ebiten.Image, s string, size float64, x, y float64, a align, 
 }
 
 // 名前タグは描画のたびに文字を組むと重い（数百人の画面で支配的になる）ので、画像にしてキャッシュする。
+// アイコンの取得状態が変わると別のタグになる（取得中はシルエット、取得後はその画像）。
 type nameTagKey struct {
-	name string
-	self bool
+	name  string
+	self  bool
+	state iconState
+	hash  string // state が iconReady のときだけ
 }
 
 // maxNameTags はキャッシュする名前タグの上限。超えたら作り直す（入退室が多いときにメモリが増え続けないように）。
 const maxNameTags = 2000
 
-func (g *Game) nameTag(name string, self bool) *ebiten.Image {
-	k := nameTagKey{name, self}
+// tagIconSize は名前タグの中のアイコンの一辺（px）。
+const tagIconSize = 16
+
+// nameTag は名前タグの画像を返す。icon は state が iconReady のときの画像で、hash はそのアイコンのハッシュ。
+func (g *Game) nameTag(name string, self bool, state iconState, hash string, icon *ebiten.Image) *ebiten.Image {
+	k := nameTagKey{name: name, self: self, state: state}
+	if state == iconReady {
+		k.hash = hash
+	}
 	if img, ok := g.nameTags[k]; ok {
 		return img
 	}
@@ -67,16 +78,41 @@ func (g *Game) nameTag(name string, self bool) *ebiten.Image {
 
 	const size = 13.0
 	w, h := textSize(name, size)
-	img := ebiten.NewImage(int(w)+10, int(h)+4)
+	iconW := 0
+	if state != iconNone {
+		iconW = tagIconSize + 4
+	}
+	img := ebiten.NewImage(int(w)+10+iconW, max(int(h)+4, tagIconSize+4))
 	bg := color.RGBA{0x10, 0x14, 0x20, 0xb0}
 	fg := color.RGBA{0xff, 0xff, 0xff, 0xff}
 	if self {
 		bg = color.RGBA{0x1f, 0x4f, 0x8f, 0xd0} // 自分は色を変えて見つけやすくする
 	}
 	img.Fill(bg)
-	drawText(img, name, size, float64(img.Bounds().Dx())/2, 2, alignCenter, fg)
+
+	switch state {
+	case iconReady:
+		op := &ebiten.DrawImageOptions{Filter: ebiten.FilterLinear}
+		op.GeoM.Scale(tagIconSize/float64(icon.Bounds().Dx()), tagIconSize/float64(icon.Bounds().Dy()))
+		op.GeoM.Translate(3, float64(img.Bounds().Dy()-tagIconSize)/2)
+		img.DrawImage(icon, op)
+	case iconLoading:
+		drawSilhouette(img, 3, float32(img.Bounds().Dy()-tagIconSize)/2, tagIconSize)
+	}
+	textCenter := float64(iconW) + float64(img.Bounds().Dx()-iconW)/2
+	drawText(img, name, size, textCenter, float64(img.Bounds().Dy()-int(h))/2, alignCenter, fg)
 	g.nameTags[k] = img
 	return img
+}
+
+// drawSilhouette は、アイコン画像が無い・取得中のときの、人のシルエットを (x, y) に size×size で描く。
+func drawSilhouette(dst *ebiten.Image, x, y, size float32) {
+	box := image.Rect(int(x), int(y), int(x+size), int(y+size))
+	clip := dst.SubImage(box).(*ebiten.Image) // 体の円が枠からはみ出さないように切り取る
+	vector.FillRect(clip, x, y, size, size, color.RGBA{0x55, 0x5b, 0x6b, 0xff}, false)
+	fg := color.RGBA{0x9a, 0xa2, 0xb8, 0xff}
+	vector.FillCircle(clip, x+size/2, y+size*0.38, size*0.2, fg, true)
+	vector.FillCircle(clip, x+size/2, y+size*1.05, size*0.38, fg, true)
 }
 
 // Gopher のクレジット（CC BY 3.0、Must）。画面中央に常時表示し、閉じる操作は設けない。

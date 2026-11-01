@@ -2,7 +2,12 @@
 package e2e
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"image"
+	"image/png"
 	"io"
 	"log/slog"
 	"net/http/httptest"
@@ -86,12 +91,14 @@ func startStack(t *testing.T) *stack {
 // firstMessage は GameServer に接続して Hello を送り、最初のメッセージを返す。
 func firstMessage(t *testing.T, url, roomToken, name string) (*officev1.ServerMessage, *netcode.Client) {
 	t.Helper()
+	return firstMessageWith(t, url, roomToken, &officev1.Profile{DisplayName: name, Gender: officev1.Gender_GENDER_FEMALE})
+}
+
+func firstMessageWith(t *testing.T, url, roomToken string, profile *officev1.Profile) (*officev1.ServerMessage, *netcode.Client) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	c, err := netcode.Dial(ctx, url, &officev1.Hello{
-		RoomToken: roomToken,
-		Profile:   &officev1.Profile{DisplayName: name, Gender: officev1.Gender_GENDER_FEMALE},
-	})
+	c, err := netcode.Dial(ctx, url, &officev1.Hello{RoomToken: roomToken, Profile: profile})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,4 +250,67 @@ func otherKeyToken(t *testing.T) string {
 func otherRoomToken(t *testing.T) string {
 	t.Helper()
 	return forgedRoomToken(t, "p", "01JZZZZZZZZZZZZZZZZZZZZZZZ")
+}
+
+// アイコンは、API にアップロード → icon_hash が GameServer 経由で他の人に伝わる → 同じ URL で取得できる、という流れで届く。
+func TestIconHashReachesOthers(t *testing.T) {
+	st := startStack(t)
+	ctx := context.Background()
+
+	owner := apiclient.New(st.apiURL)
+	if _, err := owner.CreateGuest(ctx, "owner", 0); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := owner.CreateWorkspace(ctx, "LT デモ")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	src := image.NewNRGBA(image.Rect(0, 0, 120, 80))
+	for i := range src.Pix {
+		src.Pix[i] = 0xc0
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, src); err != nil {
+		t.Fatal(err)
+	}
+	me, err := owner.UploadIcon(ctx, buf.Bytes())
+	if err != nil || me.IconHash == nil {
+		t.Fatalf("upload: %+v err=%v", me, err)
+	}
+	join, err := owner.Join(ctx, ws.InviteCode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.boundRoom = join.Room.ID
+
+	// 正しいハッシュは、そのまま伝わる。クライアントが偽った形式の違うハッシュは、空になる
+	m, _ := firstMessageWith(t, join.ServerURL, join.RoomToken, &officev1.Profile{DisplayName: "owner", IconHash: *me.IconHash})
+	if got := m.GetWelcome().GetPlayers()[0].GetProfile().GetIconHash(); got != *me.IconHash {
+		t.Fatalf("icon hash = %q, want %q", got, *me.IconHash)
+	}
+
+	other := apiclient.New(st.apiURL)
+	if _, err := other.CreateGuest(ctx, "other", 1); err != nil {
+		t.Fatal(err)
+	}
+	join2, err := other.Join(ctx, ws.InviteCode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m2, _ := firstMessageWith(t, join2.ServerURL, join2.RoomToken, &officev1.Profile{DisplayName: "other", IconHash: "../../etc/passwd"})
+	for _, p := range m2.GetWelcome().GetPlayers() {
+		if p.GetProfile().GetDisplayName() == "other" && p.GetProfile().GetIconHash() != "" {
+			t.Fatalf("a malformed icon hash must be dropped, got %q", p.GetProfile().GetIconHash())
+		}
+	}
+
+	// 認証なしでも、ハッシュ付きの URL で取得できる
+	data, err := apiclient.New(st.apiURL).Icon(ctx, me.ID, *me.IconHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum := sha256.Sum256(data); hex.EncodeToString(sum[:]) != *me.IconHash {
+		t.Fatal("the served image does not match icon_hash")
+	}
 }

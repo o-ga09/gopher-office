@@ -38,6 +38,7 @@ func loadConfig() client.Config {
 			cfg.APIBase = api
 		}
 		cfg.Store = localStorageTokens{}
+		cfg.IconPicker = filePicker{}
 		return cfg
 	}
 
