@@ -103,7 +103,7 @@ func TestChangePasswordRevokesOldTokens(t *testing.T) {
 	id, old := env.guest(t, "a", 0)
 	env.upgrade(t, old, "a@example.com", testPassword)
 
-	body := map[string]any{"current_password": "nope nope nope", "new_password": "brand new password"}
+	body := map[string]any{"current_password": "nope nope nope", "new_password": "brand new password"} //nolint:gosec // テスト用ダミー
 	if r := env.do(t, http.MethodPut, "/v1/me/password", old, body); r.Code != http.StatusUnauthorized || r.errorCode(t) != "invalid_credentials" {
 		t.Fatalf("wrong current: %d %s", r.Code, r.Body)
 	}

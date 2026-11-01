@@ -17,7 +17,7 @@ var validKey = regexp.MustCompile(`^[a-z0-9/._-]+$`)
 type Dir struct{ root string }
 
 func NewDir(root string) (*Dir, error) {
-	if err := os.MkdirAll(root, 0o755); err != nil {
+	if err := os.MkdirAll(root, 0o750); err != nil {
 		return nil, err
 	}
 	return &Dir{root: root}, nil
@@ -40,7 +40,7 @@ func (d *Dir) Put(_ context.Context, key string, data []byte, _ string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(p), ".tmp-*")
@@ -63,7 +63,7 @@ func (d *Dir) Get(_ context.Context, key string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(p)
+	data, err := os.ReadFile(p) //nolint:gosec // p は d.path がキー検査済み
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, ErrNotFound
 	}

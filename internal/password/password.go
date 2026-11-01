@@ -89,7 +89,11 @@ func parsePHC(s string) (phc, error) {
 		if !ok {
 			return phc{}, ErrInvalidHash
 		}
-		n, err := strconv.ParseUint(raw, 10, 32)
+		bits := 32
+		if i == 2 {
+			bits = 8 // threads は uint8
+		}
+		n, err := strconv.ParseUint(raw, 10, bits)
 		if err != nil {
 			return phc{}, ErrInvalidHash
 		}
@@ -98,7 +102,8 @@ func parsePHC(s string) (phc, error) {
 	if vals[0] < 8 || vals[0] > maxArgonMemoryKiB || vals[1] < 1 || vals[1] > maxArgonTime || vals[2] < 1 || vals[2] > maxArgonThreads {
 		return phc{}, ErrInvalidHash
 	}
-	h.memory, h.time, h.threads = uint32(vals[0]), uint32(vals[1]), uint8(vals[2])
+	// 上の範囲検査で各値は uint32 / uint8 に収まっている。
+	h.memory, h.time, h.threads = uint32(vals[0]), uint32(vals[1]), uint8(vals[2]) //nolint:gosec // ParseUint のビット幅と範囲検査で収まっている
 	var err error
 	if h.salt, err = b64.DecodeString(parts[4]); err != nil || len(h.salt) < 8 {
 		return phc{}, ErrInvalidHash
@@ -119,6 +124,6 @@ func VerifyPassword(pw, encoded string) (bool, error) {
 	if len(pw) > MaxPasswordLen {
 		return false, nil
 	}
-	got := argon2.IDKey([]byte(pw), h.salt, h.time, h.memory, h.threads, uint32(len(h.key)))
+	got := argon2.IDKey([]byte(pw), h.salt, h.time, h.memory, h.threads, uint32(len(h.key))) //nolint:gosec // 鍵長は 16〜64 に検査済み
 	return subtle.ConstantTimeCompare(got, h.key) == 1, nil
 }

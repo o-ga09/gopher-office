@@ -290,7 +290,7 @@ func TestGormStoreAccounts(t *testing.T) {
 	}
 	cred := func(p *Player, email string) *Credential {
 		now := time.Now().UTC().Truncate(time.Millisecond)
-		return &Credential{PlayerID: p.ID, Email: email, PasswordHash: "$argon2id$hash1", CreatedAt: now, UpdatedAt: now}
+		return &Credential{PlayerID: p.ID, Email: email, PasswordHash: "$argon2id$hash1", CreatedAt: now, UpdatedAt: now} //nolint:gosec // テスト用ダミー
 	}
 	a, b := mk("a"), mk("b")
 
