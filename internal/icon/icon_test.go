@@ -2,6 +2,7 @@ package icon
 
 import (
 	"bytes"
+	"errors"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -81,7 +82,7 @@ func TestProcess_拒否する入力(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, _, err := Process(tt.data); err != tt.want {
+			if _, _, err := Process(tt.data); !errors.Is(err, tt.want) {
 				t.Fatalf("err = %v, want %v", err, tt.want)
 			}
 		})
